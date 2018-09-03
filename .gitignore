@@ -1,0 +1,10 @@
+*.o
+*.so
+*.swp
+*~
+*.gcda
+*.gcno
+*.gcov
+*.gdb
+*.fasta
+*.fastq.gz

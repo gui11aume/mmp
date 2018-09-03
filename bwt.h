@@ -10,11 +10,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/*
 
-#ifndef _BWT_INDEX_H_
-#define _BWT_INDEX_H_
-
+#ifndef _BWT_HEADER_
+#define _BWT_HEADER_
 
 // Size of the alphabet. Note that the code will break if
 // the value is changed. It is indicated here in order
@@ -22,26 +20,15 @@
 
 #define SIGMA 4
 
-// ------- External data ------- //
-
-extern const char    ALPHABET[4];
-extern const char    ENCODE[256];
-extern const char    REVCOMP[256];
-extern const uint8_t NONALPHABET[256];
-
-
-// ------- Type definitions ------- //
-
-
-//   Aliases
+// Type aliases.
 typedef struct blocc_t  blocc_t;
-typedef struct csa_t    csa_t;
 typedef struct bwt_t    bwt_t;
+typedef struct csa_t    csa_t;
 typedef struct lut_t    lut_t;
 typedef struct occ_t    occ_t;
 typedef struct range_t  range_t;
-typedef unsigned int    uint_t;
 
+typedef unsigned int uint_t;
 
 // Entries of the Occ table combine an Occ value (the cumulative
 // number of occurrences of the character in the BWT up to and
@@ -72,6 +59,7 @@ typedef unsigned int    uint_t;
 // (a 'blocc_t' occupies 8 bytes and cache lines are 64 bytes on
 // x86), so both values are available for the price of a single
 // cache miss.
+
 struct blocc_t {
    uint_t smpl : 32;    // Sampled Occ values.
    uint_t bits : 32;    // Bitfield Occ values.
@@ -116,12 +104,17 @@ struct bwt_t {
 struct lut_t { range_t kmer[1<<(2*LUTK)]; };
 
 
+// VISIBLE FUNCTION DECLARATIONS //
 
-// Visible functions from search.c.
-range_t backward_search (const char *, size_t, const occ_t *);
-size_t  query_SA (csa_t *, bwt_t *, occ_t *, size_t);
-size_t  get_rank (const occ_t *, uint8_t, size_t);
+csa_t   * compress_sa(int64_t *);
+int64_t * compute_sa(const char *);
+bwt_t   * create_bwt(const char *, const int64_t *);
+occ_t   * create_occ(const bwt_t *);
+void      fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
+char    * normalize_genome(FILE *);
 
+#endif
+/*
 
 // ------- Error handling macros ------- //
 
@@ -152,6 +145,5 @@ size_t  get_rank (const occ_t *, uint8_t, size_t);
   #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
 #else
   #define MMAP_FLAGS MAP_PRIVATE
-#endif
 #endif
 */
