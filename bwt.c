@@ -1,5 +1,33 @@
+#define _GNU_SOURCE
+#include <assert.h>
 #include "divsufsort.h"
 #include "bwt.h"
+
+
+// FIXME: The logic of the 'mem_t' struct is very weak and does not
+// FIXME: stand a chance on something else than the test data set.
+typedef struct mem_t mem_t;
+
+#define LEN 50
+
+struct mem_t {
+   size_t  beg;
+   size_t  end;
+   range_t range;
+   // Decay cascades.
+   size_t  fwd[50];
+   size_t  bwd[50];
+};
+
+// XXX: Here is a global array to avoid 'malloc()', constructors etc.
+// XXX: This is a no-go for a real world implementation.
+mem_t MEMARRAY[LEN] = {{0}};
+
+
+const char ENCODE[256] = { ['c'] = 1, ['g'] = 2, ['t'] = 3,
+   ['C'] = 1, ['G'] = 2, ['T'] = 3 };
+const char REVCMP[256] = { ['g'] = 1, ['c'] = 2, ['a'] = 3,
+   ['G'] = 1, ['C'] = 2, ['A'] = 3 };
 
 
 // SECTION 1. MACROS //
@@ -13,8 +41,6 @@
 // SECTION 2. GLOBAL CONSTANTS OF INTEREST //
 
 const char ALPHABET[4] = "ACGT";
-const char ENCODE[256] = { ['c'] = 1, ['g'] = 2, ['t'] = 3,
-   ['C'] = 1, ['G'] = 2, ['T'] = 3 };
 
 const uint8_t NONALPHABET[256] = {
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
@@ -171,7 +197,7 @@ write_occ_blocks
 )
 // Write 'SIGMA' smpl/bits blocks to the 'blocc_t' arrays of 'Occ'
 // at position 'pos' (the array index and not the position in
-// the BWT).
+// the bwt).
 {
    for (int i = 0 ; i < SIGMA ; i++) {
       occ->rows[i * occ->nrows + idx].smpl = smpl[i];
@@ -203,7 +229,7 @@ create_occ
    uint32_t bits[SIGMA] = {0};
 
    for (size_t pos = 0 ; pos < bwt->txtlen ; pos++) {
-      // Extract symbol at position 'i' from BWT.
+      // Extract symbol at position 'i' from bwt.
       uint8_t c = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
       if (pos != bwt->zero) {   // (Skip the '$' symbol).
          diff[c]++;
@@ -303,13 +329,13 @@ size_t
 query_csa
 (
    csa_t  * csa,
-   bwt_t  * BWT,
+   bwt_t  * bwt,
    occ_t  * occ,
    size_t   pos
 )
 {
 
-   if (pos == BWT->zero) return 0;
+   if (pos == bwt->zero) return 0;
    if (pos % 16 == 0) {
       // Value is sampled. Extract it.
       size_t idx = pos / 16;
@@ -327,9 +353,9 @@ query_csa
          return (lo_bits | hi_bits) & csa->bmask;
       }
    }
-   uint8_t c = BWT->slots[pos/4] >> 2*(pos % 4) & 0b11;
+   uint8_t c = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
    size_t nextpos = get_rank(occ, c, pos) - 1;
-   return query_csa(csa, BWT, occ, nextpos) + 1;
+   return query_csa(csa, bwt, occ, nextpos) + 1;
 
 }
 
@@ -403,17 +429,206 @@ normalize_genome
 
 }
 
-   // Look up the beginning (in reverse)
-   // of the query in an array of k-mers.
-   /*
-   if (len >= HSTUB) {
-      size_t merid = 0;
-      for ( ; offset < HSTUB ; offset++) {
-         merid = (merid << 2) + ENCODE[(uint8_t) query[len-offset-1]];
+
+int
+banded_needleman_wunsch
+(
+   const char   * seq1,
+   const char   * seq2,
+   const int      len1,
+   const size_t   sz,
+   const int      cutoff
+)
+{
+
+   if (sz > 128) exit(EXIT_FAILURE);
+
+   int x;  // Mis/Match.
+   int y;  // Insertion.
+   int z;  // Deletion.
+
+   int a1[257] = {0};
+   int a2[257] = {0};
+
+   int * LCURR = a1 + 128;
+   int * LPREV = a2 + 128;
+
+   for (int i = 0 ; i < len1 ; i++) {
+      if (i > sz) {
+         x = LPREV[-sz] + (seq1[i] != seq2[i-sz]);
+         y = LPREV[-sz+1] + 1;
+         LCURR[-sz] = x < y ? x : y;
+         x = LPREV[sz] + (seq1[i-sz] != seq2[i]);
+         z = LPREV[sz-1] + 1;
+         LCURR[-sz] = x < z ? x : z;
       }
-      fprintf(stderr, "merid: %ld\n", merid);
-      range = occ->stub[merid];
-      if (range.top < range.bot)
-         return range;
+      for (int j = -sz+1; j < 0 ; j++) {
+         if (i+j < 0) continue;
+         x = LPREV[j] + (seq1[i] != seq2[i+j]);
+         y = LPREV[j+1] + 1;
+         z = LCURR[j-1] + 1;
+         LCURR[j] = x < y ? (x < z ? x : z) : (y < z ? y : z);
+      }
+      for (int j = sz-1 ; j > 0 ; j--) {
+         if (i-j < 0) continue;
+         x = LPREV[j] + (seq1[i-j] != seq2[i]);
+         y = LPREV[j-1] + 1;
+         z = LCURR[j+1] + 1;
+         LCURR[j] = x < y ? (x < z ? x : z) : (y < z ? y : z);
+      }
+      x = LPREV[0] + (seq1[i] != seq2[i]);
+      y = LCURR[-1] + 1;
+      z = LCURR[1] + 1;
+      LCURR[0] = x < y ? (x < z ? x : z) : (y < z ? y : z);
+
+      if (LCURR[0] > cutoff) return cutoff + 1 ;
+
+      int * tmp = LPREV;
+      LPREV = LCURR;
+      LCURR = tmp;
+
    }
-   */
+
+   return LCURR[0];
+
+}
+
+
+void
+align
+(
+   const index_t   idx,
+   const char    * seq,
+   const char    * genome,
+   const int       nmem
+)
+{
+   for (int i = 0 ; i < nmem ; i++) {
+      mem_t mem = MEMARRAY[i];
+      // We still kinda need to chain the seeds.
+      for (size_t pos = mem.range.bot ; pos <= mem.range.top ; pos++) {
+         size_t hitpos = query_csa(idx.csa, idx.bwt, idx.occ, pos);
+         fprintf(stderr, "%.*s\n", (int) (mem.end - mem.beg + 1),
+               seq + mem.beg);
+         fprintf(stderr, "%.*s\n--\n", (int) (mem.end - mem.beg + 1),
+               genome + hitpos);
+      }
+      // When we have the seed(s) that gave the best hit, we need to
+      // evaluate the number of copies of that sequence, and the
+      // divergence. We said we would do this with direct computation of
+      // the log-likelihood like: set mu, compute N and get loglik.
+      // For this, we need to keep more dense record of the seeding
+      // process for every seed.
+   }
+}
+
+
+void
+mapread
+(
+   const char    * seq,
+   const index_t   idx,
+   const char    * genome,
+   const size_t    gamma
+)
+{
+
+   fprintf(stderr, "\nprocesssing: %s\n", seq);
+
+   int len = strlen(seq);
+   assert(len <= LEN);
+
+   int rend = len-1;
+
+   range_t range = {0};
+   range_t newrange = {0};
+
+   // Number of MEM seeds.
+   int nmem = 0;
+
+   while (1) {
+
+      // Grab a new struct of type 'mem_t'.
+      mem_t mem = {0};
+
+      mem.end = rend;
+
+      // Backward <<<
+      range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+      int roffset = 0;
+
+      // Look up the beginning (reverse) of the query in lookup table.
+      if (rend >= LUTK) {
+         size_t merid = 0;
+         for ( ; roffset < LUTK ; roffset++) {
+            merid = (merid << 2) +
+               ENCODE[(uint8_t) seq[rend - roffset]];
+         }
+         range = idx.lut->kmer[merid];
+         mem.fwd[LUTK-1] = range.top - range.bot + 1;
+      }
+
+      // Cancel if we went too far already.
+      if (range.top - range.bot < 1) {
+         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+         roffset = 0;
+      }
+
+      for ( ; roffset <= rend ; roffset++) {
+         int c = ENCODE[(uint8_t) seq[rend-roffset]];
+         newrange.bot = get_rank(idx.occ, c, range.bot - 1);
+         newrange.top = get_rank(idx.occ, c, range.top) - 1;
+         mem.fwd[roffset-1] = newrange.top - newrange.bot + 1;
+         // Stop if less than 1 hit.
+         if (newrange.top < newrange.bot)
+            break;
+         range = newrange;
+      }
+
+      mem.beg = rend - roffset + 1;
+      mem.range = range;
+
+      // Forward >>>
+      range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+      int foffset = 0;
+
+      if (roffset >= LUTK) {
+         size_t merid = 0;
+         for ( ; foffset < LUTK ; foffset++) {
+            merid = (merid << 2) +
+               REVCMP[(uint8_t) seq[rend - roffset + foffset + 1]];
+         }
+         range = idx.lut->kmer[merid];
+         mem.bwd[LUTK-1] = range.top - range.bot + 1;
+      }
+
+      // Cancel if we went too far already.
+      if (range.top - range.bot < 1) {
+         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+         foffset = 0;
+      }
+
+      for ( ; foffset < roffset-1 ; foffset++) {
+         int c = REVCMP[(uint8_t) seq[rend - roffset + foffset + 1]];
+         range.bot = get_rank(idx.occ, c, range.bot - 1);
+         range.top = get_rank(idx.occ, c, range.top) - 1;
+         mem.bwd[LUTK-1] = range.top - range.bot + 1;
+         // Stop if less than 2 hits.
+         if (range.top - range.bot < 1)
+            break;
+      }
+
+      // Overwrite MEM if it is too short.
+      if (roffset >= gamma)
+         MEMARRAY[nmem++] = mem;
+
+      if (roffset >= rend)
+         break;
+
+      rend += - roffset + foffset - 1;
+
+   }
+
+   align(idx, seq, genome, nmem);
+
+}
