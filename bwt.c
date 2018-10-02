@@ -1,5 +1,10 @@
+#define _GNU_SOURCE
 #include "divsufsort.h"
 #include "bwt.h"
+
+
+const char ENCODE[256] = { ['c'] = 1, ['g'] = 2, ['t'] = 3,
+   ['C'] = 1, ['G'] = 2, ['T'] = 3 };
 
 
 // SECTION 1. MACROS //
@@ -13,8 +18,6 @@
 // SECTION 2. GLOBAL CONSTANTS OF INTEREST //
 
 const char ALPHABET[4] = "ACGT";
-const char ENCODE[256] = { ['c'] = 1, ['g'] = 2, ['t'] = 3,
-   ['C'] = 1, ['G'] = 2, ['T'] = 3 };
 
 const uint8_t NONALPHABET[256] = {
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
@@ -403,17 +406,49 @@ normalize_genome
 
 }
 
-   // Look up the beginning (in reverse)
-   // of the query in an array of k-mers.
+
+void
+mapread
+(
+   const char  * seq,
+   const csa_t * csa,
+   const bwt_t * bwt,
+   const occ_t * occ,
+   const lut_t * lut
+)
+{
+
+   fprintf(stderr, "processsing: %s", seq);
+
+   int len = strlen(seq);
+   if (seq[len-1] == '\n') len--;
+
+   fprintf(stderr, "length: %d\n", len);
+
+   range_t range = { .bot = 1, .top = occ->txtlen-1 };
+   int offset = 0;
+
    /*
-   if (len >= HSTUB) {
+   // Look up the beginning (reverse) of the query in lookup table.
+   if (len >= LUTK) {
       size_t merid = 0;
-      for ( ; offset < HSTUB ; offset++) {
-         merid = (merid << 2) + ENCODE[(uint8_t) query[len-offset-1]];
+      for ( ; offset < LUTK ; offset++) {
+         merid = (merid << 2) + ENCODE[(uint8_t) seq[len-offset-1]];
       }
       fprintf(stderr, "merid: %ld\n", merid);
-      range = occ->stub[merid];
-      if (range.top < range.bot)
-         return range;
+      range = lut->kmer[merid];
    }
    */
+
+   fprintf(stderr, "hello world!\n");
+   for ( ; offset < len ; offset++) {
+      fprintf(stderr, "c: %c\n", seq[len-offset-1]);
+      int c = ENCODE[(uint8_t) seq[len-offset-1]];
+      range.bot = get_rank(occ, c, range.bot - 1);
+      range.top = get_rank(occ, c, range.top) - 1;
+      // Stop if cannot continue.
+      fprintf(stderr, "  %ld:%ld\n", range.bot, range.top);
+      if (range.top < range.bot) return;
+   }
+
+}

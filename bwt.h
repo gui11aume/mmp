@@ -11,8 +11,8 @@
 #include <unistd.h>
 
 
-#ifndef _BWT_HEADER_
-#define _BWT_HEADER_
+#ifndef _bwt_HEADER_
+#define _bwt_HEADER_
 
 // Size of the alphabet. Note that the code will break if
 // the value is changed. It is indicated here in order
@@ -31,9 +31,9 @@ typedef struct range_t  range_t;
 typedef unsigned int uint_t;
 
 // Entries of the Occ table combine an Occ value (the cumulative
-// number of occurrences of the character in the BWT up to and
+// number of occurrences of the character in the bwt up to and
 // including the given position), and a bitfield where the value
-// is set to 1 if and only if the BWT has the character at this
+// is set to 1 if and only if the bwt has the character at this
 // position.
 //
 // Example 'blocc_t' data:
@@ -46,14 +46,14 @@ typedef unsigned int uint_t;
 //
 // To avoid confusion, we will use the term "index" when referring
 // to 'blocc_t' structs of an array, and "position" when referring
-// to the text or the BWT. Thus, the rank is taken on a position
+// to the text or the bwt. Thus, the rank is taken on a position
 // and not an index.
 //
-// There is one 'blocc_t' per 32 letters of the BWT. Since each
+// There is one 'blocc_t' per 32 letters of the bwt. Since each
 // 'blocc_t' occupies 64 bits, an array of 'blocc_t' occupies
-// 2 bits per letter of the BWT. Since there is one array per
+// 2 bits per letter of the bwt. Since there is one array per
 // symbol of the alphabet, an Occ table occupies '2*SIGMA' bits per
-// letter of the BWT (i.e. one byte when 'SIGMA' is 4).
+// letter of the bwt (i.e. one byte when 'SIGMA' is 4).
 //
 // Both .smpl and .bits are retrieved in a single memory reference
 // (a 'blocc_t' occupies 8 bytes and cache lines are 64 bytes on
@@ -74,7 +74,7 @@ struct range_t {
 // The 'Occ_t' struct contains a size variable 'sz', followed by
 // 'SIGMA' arrays of 'blocc_t', where 'SIGMA' is the number of
 // letters in the alphabet. Note that 'sz' is not the number of
-// 'blocc_t' in the arrays, but the size of the BWT, including the
+// 'blocc_t' in the arrays, but the size of the bwt, including the
 // termination character.
 struct occ_t {
    size_t   txtlen;      // 'strlen(txt) + 1'.
@@ -112,38 +112,7 @@ bwt_t   * create_bwt(const char *, const int64_t *);
 occ_t   * create_occ(const bwt_t *);
 void      fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
 char    * normalize_genome(FILE *);
+void      mapread (const char *, const csa_t *, const bwt_t *,
+               const occ_t *, const lut_t *);
 
 #endif
-/*
-
-// ------- Error handling macros ------- //
-
-#define exit_if_null(x) \
-   do { if ((x) == NULL) { fprintf(stderr, "memory error %s:%d:%s()\n", \
-         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
-
-#define exit_cannot_open(x) \
-   do { fprintf(stderr, "cannot open file '%s' %s:%d:%s()\n", (x), \
-         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); } while(0)
-
-#define exit_if(x) \
-   do { if (x) { fprintf(stderr, "%s %s:%d:%s()\n", #x, \
-         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
-
-
-// ------- Machine-specific code ------- //
-// The 'mmap()' option 'MAP_POPULATE' is available
-// only on Linux and from kern version 2.6.23.
-#if __linux__
-  #include <linux/version.h>
-  #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
-    #define _MAP_POPULATE_AVAILABLE
-  #endif
-#endif
-
-#ifdef _MAP_POPULATE_AVAILABLE
-  #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
-#else
-  #define MMAP_FLAGS MAP_PRIVATE
-#endif
-*/

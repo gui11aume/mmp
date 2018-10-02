@@ -73,20 +73,20 @@ test_create_bwt
    int64_t *SA = compute_sa(txt);
    test_assert_critical(SA != NULL);
 
-   bwt_t *BWT = create_bwt(txt, SA);
-   test_assert_critical(BWT != NULL);
+   bwt_t *bwt = create_bwt(txt, SA);
+   test_assert_critical(bwt != NULL);
 
-   test_assert(BWT->txtlen == 14);
-   test_assert(BWT->nslots == 4);
-   test_assert(BWT->zero == 10);
+   test_assert(bwt->txtlen == 14);
+   test_assert(bwt->nslots == 4);
+   test_assert(bwt->zero == 10);
 
-   // The BWT is GGGG GGTC AA$T AA.
-   test_assert(BWT->slots[0] == 0b10101010);
-   test_assert(BWT->slots[1] == 0b01111010);
-   test_assert(BWT->slots[2] == 0b11000000);
-   test_assert(BWT->slots[3] == 0b00000000);
+   // The bwt is GGGG GGTC AA$T AA.
+   test_assert(bwt->slots[0] == 0b10101010);
+   test_assert(bwt->slots[1] == 0b01111010);
+   test_assert(bwt->slots[2] == 0b11000000);
+   test_assert(bwt->slots[3] == 0b00000000);
 
-   free(BWT);
+   free(bwt);
    free(SA);
 
 }
@@ -133,12 +133,12 @@ test_create_occ
    int64_t *SA = compute_sa(txt);
    test_assert_critical(SA != NULL);
 
-   bwt_t *BWT = create_bwt(txt, SA);
-   test_assert_critical(BWT != NULL);
+   bwt_t *bwt = create_bwt(txt, SA);
+   test_assert_critical(bwt != NULL);
 
    free(SA);
 
-   occ_t *occ = create_occ(BWT);
+   occ_t *occ = create_occ(bwt);
    test_assert_critical(occ != NULL);
 
    test_assert(occ->txtlen == 14);
@@ -149,7 +149,7 @@ test_create_occ
    test_assert(occ->rows[2].smpl == 0);
    test_assert(occ->rows[3].smpl == 0);
 
-   // The BWT is GGGGGGTCAA$TAA.
+   // The bwt is GGGGGGTCAA$TAA.
    test_assert(occ->rows[0].bits == 0b00000000110011000000000000000000);
    test_assert(occ->rows[1].bits == 0b00000001000000000000000000000000);
    test_assert(occ->rows[2].bits == 0b11111100000000000000000000000000);
@@ -162,7 +162,7 @@ test_create_occ
    test_assert(occ->C[4] == 14);
 
    free(occ);
-   free(BWT);
+   free(bwt);
 
 }
 
@@ -177,12 +177,12 @@ test_get_rank
    int64_t *SA = compute_sa(txt);
    test_assert_critical(SA != NULL);
 
-   bwt_t *BWT = create_bwt(txt, SA);
-   test_assert_critical(BWT != NULL);
+   bwt_t *bwt = create_bwt(txt, SA);
+   test_assert_critical(bwt != NULL);
 
    free(SA);
 
-   occ_t *occ = create_occ(BWT);
+   occ_t *occ = create_occ(bwt);
    test_assert_critical(occ != NULL);
 
    const int rankA[] = {1,1,1,1,1,1,1,1,2,3,3,3,4,5};
@@ -199,7 +199,7 @@ test_get_rank
    }
 
    free(occ);
-   free(BWT);
+   free(bwt);
 
 }
 
@@ -214,12 +214,12 @@ test_fill_lut
    int64_t *SA = compute_sa(txt);
    test_assert_critical(SA != NULL);
 
-   bwt_t *BWT = create_bwt(txt, SA);
-   test_assert_critical(BWT != NULL);
+   bwt_t *bwt = create_bwt(txt, SA);
+   test_assert_critical(bwt != NULL);
 
    free(SA);
 
-   occ_t *occ = create_occ(BWT);
+   occ_t *occ = create_occ(bwt);
    test_assert_critical(occ != NULL);
 
    lut_t *lut = calloc(1, sizeof(lut_t));
@@ -233,7 +233,7 @@ test_fill_lut
 
    free(lut);
    free(occ);
-   free(BWT);
+   free(bwt);
 
 }
 
@@ -248,12 +248,12 @@ test_backward_search
    int64_t *SA = compute_sa(txt);
    test_assert_critical(SA != NULL);
 
-   bwt_t *BWT = create_bwt(txt, SA);
-   test_assert_critical(BWT != NULL);
+   bwt_t *bwt = create_bwt(txt, SA);
+   test_assert_critical(bwt != NULL);
 
    free(SA);
 
-   occ_t *occ = create_occ(BWT);
+   occ_t *occ = create_occ(bwt);
    test_assert_critical(occ != NULL);
 
    range_t range = backward_search("GATGCGAGAGAT", 12, occ);
@@ -262,7 +262,7 @@ test_backward_search
    test_assert(range.top == 10);
 
    free(occ);
-   free(BWT);
+   free(bwt);
 
 }
 
@@ -276,25 +276,25 @@ test_query_csa
    int64_t *SA = compute_sa(txt);
    test_assert_critical(SA != NULL);
 
-   bwt_t *BWT = create_bwt(txt, SA);
-   test_assert_critical(BWT != NULL);
+   bwt_t *bwt = create_bwt(txt, SA);
+   test_assert_critical(bwt != NULL);
 
    csa_t *csa = compress_sa(SA);
    test_assert_critical(csa != NULL);
    free(SA);
 
-   occ_t *occ = create_occ(BWT);
+   occ_t *occ = create_occ(bwt);
    test_assert_critical(occ != NULL);
 
    const int array[] = {13,6,8,10,1,4,12,5,7,9,0,3,11,2};
 
    for (int i = 0 ; i < 14 ; i++) {
-      test_assert(query_csa(csa, BWT, occ, i) == array[i]);
+      test_assert(query_csa(csa, bwt, occ, i) == array[i]);
    }
 
    free(csa);
    free(occ);
-   free(BWT);
+   free(bwt);
 
 }
 
