@@ -230,7 +230,16 @@ batchmap
    // Read sequence file line by line.
    while ((rlen = getline(&seq, &sz, inputf)) != -1) {
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
-      mapread(seq, idx, genome, GAMMA);
+      alnstack_t * aln = mapread(seq, idx, genome, GAMMA);
+
+      // VERBOSE (DEBUG).
+      fprintf(stderr, "Best alignments:\n");
+      for (int i = 0; i < aln->pos; i++) {
+	 aln_t a = aln->aln[i];
+	 fprintf(stderr, "[%d]\n   score: %d\n   genome position: %ld\n   MEMS:\n", i, a.score, a.refpos);
+	 for (int j = 0; j < a.nmem; j++)
+	    fprintf(stderr, "     [%d] beg: %ld, end: %ld\n", j, a.mem[j].beg, a.mem[j].end);
+      }
    }
 
    free(seq);

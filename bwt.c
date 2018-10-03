@@ -7,22 +7,33 @@
 // FIXME: The logic of the 'mem_t' struct is very weak and does not
 // FIXME: stand a chance on something else than the test data set.
 typedef struct mem_t mem_t;
+typedef struct memstack_t memstack_t;
+typedef struct seed_t seed_t;
 
 #define LEN 50
 
-struct mem_t {
-   size_t  beg;
-   size_t  end;
-   range_t range;
-   // Decay cascades.
-   size_t  fwd[50];
-   size_t  bwd[50];
+#define min(x,y) ((x) < (y) ? (x) : (y))
+#define min3(x,y,z) (min(min(x,y),z))
+
+struct memstack_t {
+   size_t pos;
+   size_t max;
+   mem_t  mem[];
 };
 
-// XXX: Here is a global array to avoid 'malloc()', constructors etc.
-// XXX: This is a no-go for a real world implementation.
-mem_t MEMARRAY[LEN] = {{0}};
+struct seed_t {
+   size_t refpos;
+   mem_t  mem;
+};
 
+memstack_t *  memstack_new (size_t max);
+void          mem_push     (mem_t mem, memstack_t ** stackp);
+alnstack_t *  alnstack_new (size_t max);
+void          aln_push     (aln_t aln, alnstack_t ** stackp);
+
+int           seed_by_refpos (const void * a, const void * b) {
+   return ((seed_t *)a)->refpos > ((seed_t *)b)->refpos;
+};
 
 const char ENCODE[256] = { ['c'] = 1, ['g'] = 2, ['t'] = 3,
    ['C'] = 1, ['G'] = 2, ['T'] = 3 };
@@ -70,6 +81,25 @@ const char REVCOMP[256] = {
     0, 0, 0, 0,'A',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     0,'T',0,'G',0, 0, 0,'C',0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0,'A',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+};
+
+const char CAPS[256] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0,'A',0,'C',0, 0, 0,'G',0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0,'T',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+    0,'A',0,'C',0, 0, 0,'G',0, 0, 0, 0, 0, 0, 0, 0, 
+    0, 0, 0, 0,'T',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
@@ -429,6 +459,67 @@ normalize_genome
 
 }
 
+int
+nw
+(
+   const char   * seq1,
+   const char   * seq2,
+   const int      len1,
+   const int      len2,
+   const int      cutoff
+)
+// Place reference in seq1, you can add extra length to len1 to allocate insertions in seq2.
+{
+   // Penalties (don't set i_p or d_p smaller than m_p!).
+   const int m_p = 1, i_p = 1, d_p = 1;
+
+   int   len = min(len1, len2);
+   int * rowp = calloc(len1+2, sizeof(int));
+   int * colp = calloc(len2+2, sizeof(int));
+   // Comment for SW.
+   for (int i = 1; i < len1+2; i++) rowp[i] = rowp[i-1] + d_p;
+   for (int j = 1; j < len2+2; j++) colp[j] = colp[j-1] + i_p;
+
+   // Align row and col.
+   int * row = rowp + 1;
+   int * col = colp + 1;
+
+   int score = cutoff;
+   for (int pos = 0; pos < len; pos++) {
+      score = cutoff;
+      // Update row.
+      int i, left, diag;
+      for (i = pos, left = col[pos], diag = row[i-1]; i < len1 && row[i-1] <= cutoff; i++) {
+	 int next_diag = row[i];
+	 left = row[i] = min3(diag + (CAPS[(int)seq1[i]] != CAPS[(int)seq2[pos]])*m_p,
+			 row[i] + i_p,
+			 left + d_p);
+	 diag = next_diag;
+	 if (row[i] < score) score = row[i];
+      }
+      // Uncomment for SW.
+      //      row[i] = row[i-1];
+
+      // Update column.
+      int j, up;
+      for (j = pos+1, up = row[pos], diag = col[pos]; j < len2 && col[j-1] <= cutoff; j++) {
+	 int next_diag = col[j];
+	 up = col[j] = min3(diag + (CAPS[(int)seq1[pos]] != CAPS[(int)seq2[j]])*m_p,
+			    up + i_p,
+			    col[j] + d_p);
+	 diag = next_diag;
+	 if (col[j] < score) score = col[j];
+      }
+      // Uncomment for SW.
+      //      col[j] = col[j-1];
+   }
+
+   free(rowp);
+   free(colp);
+
+   return score;
+}
+
 
 int
 banded_needleman_wunsch
@@ -494,36 +585,105 @@ banded_needleman_wunsch
 }
 
 
-void
+alnstack_t *
 align
 (
-   const index_t   idx,
-   const char    * seq,
-   const char    * genome,
-   const int       nmem
+   const index_t      idx,
+   const char       * seq,
+   const char       * genome,
+   const memstack_t * mems
 )
 {
-   for (int i = 0 ; i < nmem ; i++) {
-      mem_t mem = MEMARRAY[i];
+   int slen = strlen(seq);
+   // Count loci.
+   size_t nloc = 0;
+   for (int i = 0 ; i < mems->pos ; i++) {
+      mem_t mem = mems->mem[i];
+      nloc += mem.range.top - mem.range.bot + 1;
+   }
+
+   // Allocate align positions.
+   seed_t * seeds = malloc(sizeof(seed_t)*nloc);
+   exit_on_memory_error(seeds);
+
+   // Query SA.
+   for (int i = 0, j = 0; i < mems->pos; i++) {
+      mem_t mem = mems->mem[i];
       // We still kinda need to chain the seeds.
       for (size_t pos = mem.range.bot ; pos <= mem.range.top ; pos++) {
          size_t hitpos = query_csa(idx.csa, idx.bwt, idx.occ, pos);
-         fprintf(stderr, "%.*s\n", (int) (mem.end - mem.beg + 1),
-               seq + mem.beg);
-         fprintf(stderr, "%.*s\n--\n", (int) (mem.end - mem.beg + 1),
-               genome + hitpos);
+	 seeds[j++] = (seed_t){hitpos, mem};
       }
+   }
+
+   // Sort by align loci.
+   qsort(seeds, nloc, sizeof(seed_t), seed_by_refpos);
+
+   // Best alignment.
+   int best_score = slen+1;
+   size_t last_locus = 0;
+   alnstack_t * best = alnstack_new(10);
+   
+   // Align and chain mems.
+   for (int i = 0; i < nloc; i++) {
+      seed_t seed = seeds[i];
+      mem_t mem = seed.mem;
+      if (last_locus <= seed.refpos) { // Align.
+	 const char * ref = genome + seed.refpos - mem.beg;
+	 int score = nw(ref,
+			seq,
+			slen+3, // Allow 3 nucleotides to allocate insertions.
+			slen,
+			best_score + 1
+			);
+	 
+	 // VERBOSE ALIGNMENT (DEBUG)
+	 fprintf(stderr, "%.*s %.*s %.*s\n", (int)mem.beg, seq, (int) (mem.end - mem.beg + 1),
+		 seq + mem.beg, (int)(slen-mem.end-1), seq + mem.end + 1);
+	 fprintf(stderr, "%.*s %.*s %.*s\nscore: %d\n--\n", (int)mem.beg, ref, (int) (mem.end - mem.beg + 1),
+		 ref + mem.beg, (int)(slen-mem.end-1), ref + mem.end + 1, score);
+
+	 // Check align score.
+	 if (score <= best_score) {
+	    // Reset chain anchor.
+	    last_locus = seed.refpos + (slen - mem.beg);
+	    // Create new alignment.
+	    aln_t aln;
+	    aln.score  = score;
+	    aln.nmem   = 1;
+	    aln.refpos = seed.refpos;
+	    aln.refseq = ref;
+	    aln.mem[0] = mem;
+	    
+	    if (score < best_score) {
+	       best_score = score;
+	       // Reset best align stack.
+	       best->pos = 0;
+	       aln_push(aln, &best);
+	    } else {
+	       // Add alignment to best.
+	       aln_push(aln, &best);
+	    }
+	 }
+      } else { // Chain. (Add mem to alignment)
+	 fprintf(stderr, "* chain seed - alignment skipped\n--\n");
+	 best->aln[best->pos-1].mem[best->aln[best->pos-1].nmem++] = mem;
+      }
+   }
+      
       // When we have the seed(s) that gave the best hit, we need to
       // evaluate the number of copies of that sequence, and the
       // divergence. We said we would do this with direct computation of
       // the log-likelihood like: set mu, compute N and get loglik.
       // For this, we need to keep more dense record of the seeding
       // process for every seed.
-   }
+   free(seeds);
+
+   return best;
 }
 
 
-void
+alnstack_t *
 mapread
 (
    const char    * seq,
@@ -533,102 +693,182 @@ mapread
 )
 {
 
-   fprintf(stderr, "\nprocesssing: %s\n", seq);
+   fprintf(stderr, "\nprocessing: %s\n", seq);
 
    int len = strlen(seq);
    assert(len <= LEN);
 
-   int rend = len-1;
+   int end = len-1;
 
    range_t range = {0};
    range_t newrange = {0};
 
    // Number of MEM seeds.
-   int nmem = 0;
+   memstack_t * mems = memstack_new(50);
 
    while (1) {
-
       // Grab a new struct of type 'mem_t'.
       mem_t mem = {0};
 
-      mem.end = rend;
+      mem.end = end;
 
       // Backward <<<
       range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-      int roffset = 0;
+      int mpos = end, mlen = 0;
 
       // Look up the beginning (reverse) of the query in lookup table.
-      if (rend >= LUTK) {
+      if (end >= LUTK - 1) {
          size_t merid = 0;
-         for ( ; roffset < LUTK ; roffset++) {
+         for ( ; mlen < LUTK ; mlen++, mpos--) {
             merid = (merid << 2) +
-               ENCODE[(uint8_t) seq[rend - roffset]];
+               ENCODE[(uint8_t) seq[mlen]];
          }
          range = idx.lut->kmer[merid];
-         mem.fwd[LUTK-1] = range.top - range.bot + 1;
+         mem.left[LUTK-1] = range.top - range.bot + 1;
       }
 
       // Cancel if we went too far already.
-      if (range.top - range.bot < 1) {
+      if (range.top < range.bot) {
          range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-         roffset = 0;
+         mpos = end; mlen = 0;
       }
 
-      for ( ; roffset <= rend ; roffset++) {
-         int c = ENCODE[(uint8_t) seq[rend-roffset]];
+      for ( ; mpos >= 0 ; mpos--, mlen++) {
+         int c = ENCODE[(uint8_t) seq[mpos]];
          newrange.bot = get_rank(idx.occ, c, range.bot - 1);
          newrange.top = get_rank(idx.occ, c, range.top) - 1;
-         mem.fwd[roffset-1] = newrange.top - newrange.bot + 1;
-         // Stop if less than 1 hit.
+         mem.left[mlen] = newrange.top - newrange.bot + 1;
+         // Stop if no hits.
          if (newrange.top < newrange.bot)
             break;
          range = newrange;
       }
 
-      mem.beg = rend - roffset + 1;
+      mem.beg = ++mpos;
       mem.range = range;
 
       // Forward >>>
       range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-      int foffset = 0;
-
-      if (roffset >= LUTK) {
+      mlen = 0;
+      
+      if (end >= LUTK - 1) {
          size_t merid = 0;
-         for ( ; foffset < LUTK ; foffset++) {
+         for ( ; mlen < LUTK ; mpos++, mlen++) {
             merid = (merid << 2) +
-               REVCMP[(uint8_t) seq[rend - roffset + foffset + 1]];
+               REVCMP[(uint8_t) seq[mpos]];
          }
          range = idx.lut->kmer[merid];
-         mem.bwd[LUTK-1] = range.top - range.bot + 1;
+         mem.right[LUTK-1] = range.top - range.bot + 1;
       }
 
       // Cancel if we went too far already.
-      if (range.top - range.bot < 1) {
+      if (range.top < range.bot) {
          range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-         foffset = 0;
+         mpos = mem.beg; mlen = 0;
       }
 
-      for ( ; foffset < roffset-1 ; foffset++) {
-         int c = REVCMP[(uint8_t) seq[rend - roffset + foffset + 1]];
+      for ( ; mpos <= end ; mpos++, mlen++) {
+         int c = REVCMP[(uint8_t) seq[mpos]];
          range.bot = get_rank(idx.occ, c, range.bot - 1);
          range.top = get_rank(idx.occ, c, range.top) - 1;
-         mem.bwd[LUTK-1] = range.top - range.bot + 1;
-         // Stop if less than 2 hits.
-         if (range.top - range.bot < 1)
+         mem.right[mlen] = range.top - range.bot + 1;
+         // Stop if less than bw_hits.
+         if (range.top < range.bot)
             break;
       }
 
       // Overwrite MEM if it is too short.
-      if (roffset >= gamma)
-         MEMARRAY[nmem++] = mem;
+      if (mlen >= gamma)
+	 mem_push(mem, &mems);
 
-      if (roffset >= rend)
+      if (mem.beg < 1)
+	 break;
+
+      // Find new end position (forward).
+      range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+      end = mem.beg - 1;
+      while (1) {
+	 int c = REVCMP[(uint8_t) seq[end]];
+         range.bot = get_rank(idx.occ, c, range.bot - 1);
+         range.top = get_rank(idx.occ, c, range.top) - 1;
+	 if (range.top < range.bot) {
+	    end--;
+	    break;
+	 }
+	 end++;
+      }
+      if (end + 1 < gamma)
          break;
 
-      rend += - roffset + foffset - 1;
+   }
+   fprintf(stderr, "MEMS found: %ld\n-- Alignments --\n", mems->pos);
 
+   alnstack_t * aln = align(idx, seq, genome, mems);
+   free(mems);
+   
+   return aln;
+}
+
+memstack_t *
+memstack_new
+(
+ size_t max
+)
+{
+   memstack_t * stack = malloc(sizeof(memstack_t) + max*sizeof(mem_t));
+   exit_on_memory_error(stack);
+   stack->max = max;
+   stack->pos = 0;
+   return stack;
+}
+
+void
+mem_push
+(
+  mem_t mem,
+  memstack_t ** stackp
+)
+{
+   memstack_t * stack = *stackp;
+   if (stack->pos >= stack->max) {
+      size_t newmax = stack->max*2;
+      stack = *stackp = realloc(stack, sizeof(memstack_t)+newmax*sizeof(mem_t));
+      exit_on_memory_error(stack);
+      stack->max = newmax;
    }
 
-   align(idx, seq, genome, nmem);
+   stack->mem[stack->pos++] = mem;
+   return;
+}
 
+alnstack_t *
+alnstack_new
+(
+ size_t max
+)
+{
+   alnstack_t * stack = malloc(sizeof(alnstack_t) + max*sizeof(aln_t));
+   exit_on_memory_error(stack);
+   stack->max = max;
+   stack->pos = 0;
+   return stack;
+}
+
+void
+aln_push
+(
+  aln_t aln,
+  alnstack_t ** stackp
+)
+{
+   alnstack_t * stack = *stackp;
+   if (stack->pos >= stack->max) {
+      size_t newmax = stack->max*2;
+      stack = *stackp = realloc(stack, sizeof(alnstack_t)+newmax*sizeof(aln_t));
+      exit_on_memory_error(stack);
+      stack->max = newmax;
+   }
+
+   stack->aln[stack->pos++] = aln;
+   return;
 }

@@ -21,13 +21,17 @@
 #define SIGMA 4
 
 // Type aliases.
-typedef struct blocc_t  blocc_t;
-typedef struct bwt_t    bwt_t;
-typedef struct csa_t    csa_t;
-typedef struct lut_t    lut_t;
-typedef struct index_t  index_t;
-typedef struct occ_t    occ_t;
-typedef struct range_t  range_t;
+typedef struct blocc_t    blocc_t;
+typedef struct bwt_t      bwt_t;
+typedef struct csa_t      csa_t;
+typedef struct lut_t      lut_t;
+typedef struct index_t    index_t;
+typedef struct occ_t      occ_t;
+typedef struct range_t    range_t;
+typedef struct mem_t      mem_t;
+typedef struct aln_t      aln_t;
+typedef struct alnstack_t alnstack_t;
+
 
 typedef unsigned int uint_t;
 
@@ -112,15 +116,40 @@ struct index_t {
    lut_t * lut;
 };
 
+struct mem_t {
+   size_t  beg;
+   size_t  end;
+   range_t range;
+   // Decay cascades.
+   size_t  left[50];
+   size_t  right[50];
+};
+
+struct aln_t {
+   int          score;
+   int          nmem;
+   size_t       refpos;
+   const char * refseq;
+   mem_t        mem[10];
+};
+
+struct alnstack_t {
+   size_t pos;
+   size_t max;
+   aln_t  aln[];
+};
+
+
+
 
 // VISIBLE FUNCTION DECLARATIONS //
 
-csa_t   * compress_sa(int64_t *);
-int64_t * compute_sa(const char *);
-bwt_t   * create_bwt(const char *, const int64_t *);
-occ_t   * create_occ(const bwt_t *);
-void      fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
-char    * normalize_genome(FILE *);
-void      mapread (const char *, index_t, const char *, size_t);
+csa_t      * compress_sa(int64_t *);
+int64_t    * compute_sa(const char *);
+bwt_t      * create_bwt(const char *, const int64_t *);
+occ_t      * create_occ(const bwt_t *);
+void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
+char       * normalize_genome(FILE *);
+alnstack_t * mapread (const char *, index_t, const char *, size_t);
 
 #endif
