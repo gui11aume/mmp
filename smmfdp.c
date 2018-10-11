@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <math.h>
 #include "divsufsort.h"
 #include "bwt.h"
 
@@ -202,6 +203,43 @@ load_index
 }
 
 
+void
+analyze_mem
+(
+   mem_t mem
+)
+{
+
+   const int n = GAMMA;
+   const double MU[6] = {.01, .02, .05, .10, .15, .25};
+
+   const double cst1 = mem.left[n] - 1;
+         double cst2 = (n+1) * (mem.left[n] - 1);
+   // FIXME: put a sentinel in 'mem.left'.
+   for (int i = GAMMA+1 ; mem.left[i] > 0 ; i++) cst2 += mem.left[i] - 1;
+
+   double loglik = -INFINITY;
+   for (int iter = 0 ; iter < 6 ; iter++) {
+
+      double mu = MU[iter];
+      double f1 = cst2 / (1-mu) - cst2 / mu;
+      double f2 = (1 - pow(1-mu,n)) / (n * pow(1-mu,n-1));
+
+      // Compute the number of duplicates.
+      double N0 = cst1 + f1 * f2;
+      if (N0 < 1.0) N0 = 1.0;
+
+      double tmp = lgamma(N0+1) - lgamma(N0-cst1+1) + cst1 * log(mu) + 
+         cst2 * log(1-mu) + (N0 - cst1) * log(1-pow(1-mu,n));
+
+      if (tmp < loglik) break;
+      loglik = tmp;
+
+   }
+
+   return;
+}
+
 
 void
 batchmap
@@ -233,12 +271,31 @@ batchmap
       alnstack_t * aln = mapread(seq, idx, genome, GAMMA);
 
       // VERBOSE (DEBUG).
-      fprintf(stderr, "Best alignments:\n");
+      fprintf(stderr, "Best alignment(s):\n");
+
       for (int i = 0; i < aln->pos; i++) {
-	 aln_t a = aln->aln[i];
-	 fprintf(stderr, "[%d]\n   score: %d\n   genome position: %ld\n   MEMS:\n", i, a.score, a.refpos);
-	 for (int j = 0; j < a.nmem; j++)
-	    fprintf(stderr, "     [%d] beg: %ld, end: %ld\n", j, a.mem[j].beg, a.mem[j].end);
+         aln_t a = aln->aln[i];
+         fprintf(stderr, "[%d]\n  score: %d\n  pos: %ld\n  MEMs:\n",
+               i, a.score, a.refpos);
+         for (int j = 0; j < a.nmem; j++) {
+
+            mem_t mem = a.mem[j];
+            fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
+                  j, mem.beg, mem.end);
+
+            fprintf(stderr, "test: %ld\n", mem.left[GAMMA]);
+            analyze_mem(mem);
+
+            //fprintf(stderr, "   Left : ");
+            //for (int r = GAMMA ; mem.left[r] > 0 ; r++) {
+            //   fprintf(stderr, "%zu ", mem.left[r]);
+            //}
+            //fprintf(stderr, "\n   Right: ");
+            //for (int r = GAMMA ; mem.right[r] > 0 ; r++) {
+            //   fprintf(stderr, "%zu ", mem.right[r]);
+            //}
+            //fprintf(stderr, "\n");
+         }
       }
    }
 
