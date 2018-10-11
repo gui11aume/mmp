@@ -1,7 +1,10 @@
 #define _GNU_SOURCE
+
 #include <math.h>
-#include "divsufsort.h"
+
 #include "bwt.h"
+#include "divsufsort.h"
+#include "mem_seed_prob.h"
 
 #define GAMMA 17
 
@@ -63,28 +66,28 @@ build_index
    // Read and normalize genome
    fprintf(stderr, "reading genome... ");
    char * genome = normalize_genome(fasta);
-   fprintf(stderr, "done\n");
+   fprintf(stderr, "done.\n");
 
    fprintf(stderr, "creating suffix array... ");
    int64_t * sa = compute_sa(genome);
-   fprintf(stderr, "done\n");
+   fprintf(stderr, "done.\n");
 
    fprintf(stderr, "creating bwt... ");
    bwt_t * bwt = create_bwt(genome, sa);
-   fprintf(stderr, "done\n");
+   fprintf(stderr, "done.\n");
 
    fprintf(stderr, "creating Occ table... ");
    occ_t * occ = create_occ(bwt);
-   fprintf(stderr, "done\n");
+   fprintf(stderr, "done.\n");
 
    fprintf(stderr, "filling lookup table... ");
    lut_t * lut = malloc(sizeof(lut_t));
    fill_lut(lut, occ, (range_t) {.bot=1, .top=strlen(genome)}, 0, 0);
-   fprintf(stderr, "done\n");
+   fprintf(stderr, "done.\n");
 
    fprintf(stderr, "compressing suffix array... ");
    csa_t * csa = compress_sa(sa);
-   fprintf(stderr, "done\n");
+   fprintf(stderr, "done.\n");
 
    // Write files
    char buff[256];
@@ -213,31 +216,56 @@ analyze_mem
    const int n = GAMMA;
    const double MU[6] = {.01, .02, .05, .10, .15, .25};
 
-   const double cst1 = mem.left[n] - 1;
-         double cst2 = (n+1) * (mem.left[n] - 1);
+   const double L1 = mem.left[n] - 1;
+   const double R1 = mem.right[n] - 1;
+         double L2 = (n+1) * (mem.left[n] - 1);
+         double R2 = (n+1) * (mem.right[n] - 1);
+
    // FIXME: put a sentinel in 'mem.left'.
-   for (int i = GAMMA+1 ; mem.left[i] > 0 ; i++) cst2 += mem.left[i] - 1;
+   for (int i = GAMMA+1 ; mem.left[i] > 0 ; i++) {
+      L2 += mem.left[i] - 1;
+      R2 += mem.right[i] - 1;
+   }
 
    double loglik = -INFINITY;
+   size_t best_N0 = 0.0;
+   double best_mu = 0.0;
+
    for (int iter = 0 ; iter < 6 ; iter++) {
 
       double mu = MU[iter];
-      double f1 = cst2 / (1-mu) - cst2 / mu;
-      double f2 = (1 - pow(1-mu,n)) / (n * pow(1-mu,n-1));
+
+      double L3 = L2 / (1-mu) - L1 / mu;
+      double R3 = R2 / (1-mu) - R1 / mu;
+
+      double C = (1 - pow(1-mu,n)) / (n * pow(1-mu,n-1));
 
       // Compute the number of duplicates.
-      double N0 = cst1 + f1 * f2;
+      double N0 = (L1+R1 + C*(L3+R3)) / 2.0;
+
       if (N0 < 1.0) N0 = 1.0;
 
-      double tmp = lgamma(N0+1) - lgamma(N0-cst1+1) + cst1 * log(mu) + 
-         cst2 * log(1-mu) + (N0 - cst1) * log(1-pow(1-mu,n));
+      double tmp = 2*lgamma(N0+1) + (L1+R1) * log(mu)
+         + (L2+R2) * log(1-mu)
+         + (2*N0 - (L1+L2)) * log(1-pow(1-mu,n))
+         - lgamma(N0-L1+1)  - lgamma(N0-L2+1);
 
-      if (tmp < loglik) break;
+      if (tmp < loglik) {
+         break;
+      }
+
       loglik = tmp;
+      best_N0 = ceil(N0);
+      best_mu = mu;
 
    }
 
+   fprintf(stderr, "N0 = %ld, mu = %.2f\n", best_N0, best_mu);
+   double prob = mem_false_pos(50, best_mu, best_N0);
+   fprintf(stderr, "False prob: %f\n", prob);
+
    return;
+
 }
 
 
@@ -249,6 +277,7 @@ batchmap
 )
 {
 
+   fprintf(stderr, "loading index... ");
    // Load index files.
    index_t idx = load_index(indexfname);
 
@@ -257,8 +286,12 @@ batchmap
    if (fasta == NULL) exit_cannot_open(indexfname);
    char * genome = normalize_genome(fasta);
 
+   fprintf(stderr, "done.\n");
    FILE * inputf = fopen(readsfname, "r");
    if (inputf == NULL) exit_cannot_open(readsfname);
+
+   // Initialize MEM seed probablities.
+   set_params_mem_prob(GAMMA, 50, .01);
 
    size_t sz = 64;
    ssize_t rlen;
@@ -283,7 +316,6 @@ batchmap
             fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
                   j, mem.beg, mem.end);
 
-            fprintf(stderr, "test: %ld\n", mem.left[GAMMA]);
             analyze_mem(mem);
 
             //fprintf(stderr, "   Left : ");
@@ -300,6 +332,7 @@ batchmap
    }
 
    free(seq);
+   clean_mem_prob();
 
    // FIXME: Would be nice to do this, but the size is unknown.
    // FIXME: Either forget it, or store the size somewhere.

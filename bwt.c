@@ -713,6 +713,7 @@ mapread
    memstack_t * mems = memstack_new(50);
 
    while (1) {
+
       // Grab a new struct of type 'mem_t'.
       mem_t mem = {0};
 
@@ -726,8 +727,8 @@ mapread
       if (end >= LUTK - 1) {
          size_t merid = 0;
          for ( ; mlen < LUTK ; mlen++, mpos--) {
-            merid = (merid << 2) +
-               ENCODE[(uint8_t) seq[mlen]];
+            uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
+            merid = c + (merid << 2);
          }
          range = idx.lut->kmer[merid];
          mem.left[LUTK-1] = range.top - range.bot + 1;
@@ -757,12 +758,12 @@ mapread
       // Forward >>>
       range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
       mlen = 0;
-      
+
       if (end >= LUTK - 1) {
          size_t merid = 0;
          for ( ; mlen < LUTK ; mpos++, mlen++) {
-            merid = (merid << 2) +
-               REVCMP[(uint8_t) seq[mpos]];
+            uint8_t c = REVCMP[(uint8_t) seq[mpos]];
+            merid = c + (merid << 2);
          }
          range = idx.lut->kmer[merid];
          mem.right[LUTK-1] = range.top - range.bot + 1;
@@ -803,8 +804,8 @@ mapread
          }
          end++;
       }
-      if (end + 1 < gamma)
-         break;
+
+      if (end + 1 < gamma) break;
 
    }
 
