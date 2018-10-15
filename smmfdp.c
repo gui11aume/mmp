@@ -329,6 +329,7 @@ batchmap
             //fprintf(stderr, "\n");
          }
       }
+      free(aln);
    }
 
    free(seq);
