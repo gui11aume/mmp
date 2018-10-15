@@ -448,7 +448,7 @@ recursive_csa_query
    exit_on_memory_error(c_count);
 
    // For each position in range:
-   for (int pos = range.bot, i = 0; pos <= range.top; pos++, i++) {
+   for (size_t pos = range.bot, i = 0; pos <= range.top; pos++, i++) {
       // 1. Get preceding character from BWT.
       prev_c[i] = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
       c_count[prev_c[i]]++;
