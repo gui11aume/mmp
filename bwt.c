@@ -389,6 +389,133 @@ query_csa
 }
 
 
+void
+recursive_csa_query
+(
+   csa_t  * csa,
+   bwt_t  * bwt,
+   occ_t  * occ,
+   range_t  range,
+   size_t * sa_values,
+   size_t   path_offset
+)
+{
+   // Get sampled SA values.
+   // Compute offset to the closest %16.
+   size_t offset = (16 - range.bot%16)%16;
+   size_t pos    = range.bot + offset;
+   while (pos <= range.top) {
+      // Extract sampled value.
+      size_t idx = pos / 16;
+      size_t lo  = csa->nbits * idx;
+      size_t hi  = csa->nbits * (idx+1)-1;
+      if (lo/64 == hi/64) {
+         // Entry fits in a single 'uint64_t'.
+         // Use mask to extract the n-bit encoding of the position.
+         sa_values[offset] = (size_t) csa->bitf[lo/64] >> lo % 64 & csa->bmask;
+      }
+      else {
+         // Entry is split between two 'uint64_t'.
+         size_t lo_bits = (size_t) csa->bitf[lo/64] >> lo % 64;
+         size_t hi_bits = (size_t) csa->bitf[hi/64] << (64-lo) % 64;
+         sa_values[offset] = (lo_bits | hi_bits) & csa->bmask;
+      }
+      // Add path offset to get original position.
+      sa_values[offset] += path_offset;
+      // Find new sampled position.
+      offset += 16;
+      pos    += 16;
+   }
+
+   // If all positions are covered, return.
+   int    done = 1;
+   size_t rlen = range.top - range.bot + 1;
+   for (int i = 0; i < rlen; i++) {
+      if (!sa_values[i]) {
+	 done = 0;
+	 break;
+      }
+   }
+
+   if (done) return;
+
+   // Otherwise extend unsampled paths.
+   uint8_t * prev_c  = malloc(rlen * sizeof(uint8_t));
+   uint8_t * extend  = calloc(4, sizeof(uint8_t));
+   int     * c_count = calloc(4, sizeof(int));
+   exit_on_memory_error(prev_c);
+   exit_on_memory_error(extend);
+   exit_on_memory_error(c_count);
+
+   // For each position in range:
+   for (int pos = range.bot, i = 0; pos <= range.top; pos++, i++) {
+      // 1. Get preceding character from BWT.
+      prev_c[i] = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
+      c_count[prev_c[i]]++;
+      // 2. Mark the nucleotide for extension if SA value is missing.
+      if (!sa_values[i]) extend[(int)prev_c[i]] = 1;
+   }
+
+   // Extend unsampled nucleotides.
+   for (int c = 0; c < 4; c++) {
+      if(!extend[c]) continue;
+
+      size_t * idx_c       = malloc(c_count[c]*sizeof(size_t));
+      size_t * sa_values_c = malloc(c_count[c]*sizeof(size_t));
+      exit_on_memory_error(idx_c);
+      exit_on_memory_error(sa_values_c);
+
+      for (int i = 0, j = 0; i < rlen; i++) {
+	 if (prev_c[i] != c) continue;
+	 // Assemble new sa_values vector for the current nucleotide.
+	 sa_values_c[j] = sa_values[i];
+	 // Store the positions of the current nucleotide in a list.
+	 idx_c[j++] = i;
+      }
+
+      // Get new range.
+      range_t newrange;
+      newrange.bot = get_rank(occ, c, range.bot - 1);
+      newrange.top = get_rank(occ, c, range.top) - 1;
+
+      // Recursive call.
+      recursive_csa_query(csa, bwt, occ, newrange, sa_values_c, path_offset+1);
+
+      // Place sa_values back in their original position.
+      for (int i = 0; i < c_count[c]; i++) {
+	 sa_values[idx_c[i]] = sa_values_c[i];
+      }
+
+      // Free memory.
+      free(idx_c);
+      free(sa_values_c);
+   }
+
+   free(prev_c);
+   free(extend);
+   free(c_count);
+}
+
+
+size_t *
+query_csa_range
+(
+   csa_t  * csa,
+   bwt_t  * bwt,
+   occ_t  * occ,
+   range_t  range
+)
+{
+
+   size_t * sa_values = calloc((range.top - range.bot + 1), sizeof(size_t));
+   exit_on_memory_error(sa_values);
+
+   recursive_csa_query(csa, bwt, occ, range, sa_values, 0);
+
+   return sa_values;
+}
+
+
 char *
 normalize_genome
 (
@@ -611,9 +738,18 @@ align
    for (int i = 0, j = 0; i < mems->pos; i++) {
       mem_t mem = mems->mem[i];
       // We still kinda need to chain the seeds.
+      /*
+      // THIS USES SINGLE CSA QUERY.
       for (size_t pos = mem.range.bot ; pos <= mem.range.top ; pos++) {
          size_t hitpos = query_csa(idx.csa, idx.bwt, idx.occ, pos);
          seeds[j++] = (seed_t) {hitpos, mem};
+      }
+      */
+
+      // RANGE CSA QUERY.
+      size_t * sa_values = query_csa_range(idx.csa, idx.bwt, idx.occ, mem.range);
+      for (size_t k = 0 ; k < mem.range.top - mem.range.bot + 1 ; k++) {
+         seeds[j++] = (seed_t) {sa_values[k], mem};
       }
    }
 
