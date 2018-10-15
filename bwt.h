@@ -117,12 +117,13 @@ struct index_t {
 };
 
 struct mem_t {
-   size_t  beg;
-   size_t  end;
-   range_t range;
+   size_t    beg;
+   size_t    end;
+   range_t   range;
+   size_t  * sa;
    // Decay cascades.
-   size_t  left[50];
-   size_t  right[50];
+   size_t    left[50];
+   size_t    right[50];
 };
 
 struct aln_t {
