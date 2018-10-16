@@ -255,7 +255,7 @@ analyze_mem
       }
 
       loglik = tmp;
-      best_N0 = ceil(N0);
+      best_N0 = round(N0);
       best_mu = mu;
 
    }
@@ -301,6 +301,8 @@ batchmap
    // Read sequence file line by line.
    while ((rlen = getline(&seq, &sz, inputf)) != -1) {
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
+
+      fprintf(stderr, "[%s]\n", seq);
       alnstack_t * aln = mapread(seq, idx, genome, GAMMA);
 
       // VERBOSE (DEBUG).

@@ -804,7 +804,7 @@ nonoverlapping_mems
 
    // DEBUG VERBOSE
    if (DEBUG_VERBOSE) {
-      fprintf(stdout,"MEMs (%ld):\n", mems->pos);
+      fprintf(stdout,"\nMEMs (%ld):\n", mems->pos);
       for(int i = 0; i < mems->pos; i++) {
 	 mem_t * m = (mem_t *) mems->ptr[i];
 	 fprintf(stdout, "[%d] (%ld, %ld) range: (%ld, %ld)\n", i, m->beg, m->end, m->range.bot, m->range.top);
