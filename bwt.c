@@ -22,7 +22,7 @@ struct memchain_t {
    size_t    loci;
    int       minscore;
    int       span;
-   mem_t  ** mem;
+   mem_t   * mem[];
 };
 
 struct seed_t {
@@ -757,13 +757,13 @@ recursive_mem_chain
 {
    size_t mem_end = ((mem_t *) mems->ptr[mem_pos])->end;
    // For MEMs overlapping MEM[pos].
-   for (int i = mem_pos; ((mem_t *)mems->ptr[i])->beg <= mem_end; i++) {
+   for (size_t i = mem_pos; i < mems->pos && ((mem_t *)mems->ptr[i])->beg <= mem_end; i++) {
       // Extend chain.
       chain[chain_pos] = (mem_t *) mems->ptr[i];
       // Get next nonoverlapping MEM.
-      int j;
+      size_t j;
       for (j = i+1; j < mems->pos; j++) {
-	 if (((mem_t *)mems->ptr[j])->beg > mem_end)
+	 if (((mem_t *)mems->ptr[j])->beg > ((mem_t *) mems->ptr[i])->end)
 	    break;
       }
       // We reached the chain end, store chain.
@@ -772,7 +772,7 @@ recursive_mem_chain
 	 // Push mems to chain and compute span.
 	 int span = 0;
 	 size_t loci = 0;
-	 for (int k = 0; k < chain_pos; k++) {
+	 for (size_t k = 0; k <= chain_pos; k++) {
 	    span += chain[k]->end - chain[k]->beg + 1;
 	    loci += chain[k]->range.top - chain[k]->range.bot + 1;
 	    mem_push(chain[k], &memchain);
@@ -831,7 +831,12 @@ chain_min_score
    int minscore = 0;
 
    // Add mismatches at chain ends.
-   minscore += (chain->mem[0]->beg > 0) + (chain->mem[chain->pos-1]->end < seqlen-1);
+   
+   if (chain->mem[0]->beg > 0)
+      minscore += ((chain->mem[0]->beg - 1) / gamma) + 1;
+
+   if (chain->mem[chain->pos-1]->end < seqlen-1)
+      minscore += (seqlen - 2 - chain->mem[chain->pos-1]->end)/gamma + 1;
 
    // Add gap mismatches.
    for (int i = 1; i < chain->pos; i++) {
@@ -868,7 +873,7 @@ align
    }
 
    // Sort mem chains by minscore(inc) then span(dec).
-   qsort(chain_stack, chain_stack->pos, sizeof(memchain_t *), minscore_then_span);
+   qsort(chain_stack->ptr, chain_stack->pos, sizeof(memchain_t *), minscore_then_span);
 
    // DEBUG VERBOSE
    if (DEBUG_VERBOSE) {
@@ -884,6 +889,7 @@ align
       fprintf(stdout,"\n");
    }
 
+
    int best_score = slen;
    alnstack_t * best = alnstack_new(10);
    
@@ -892,6 +898,10 @@ align
       memchain_t * chain = (memchain_t *) chain_stack->ptr[i];
 
       if (chain->minscore > best_score) break;
+
+      if (DEBUG_VERBOSE) {
+	 fprintf(stdout, "Aligning MEM chain %d:\n", i);
+      }
 
       // Allocate seeds.
       seed_t * seeds = malloc(chain->loci * sizeof(seed_t));
@@ -928,7 +938,7 @@ align
       // Sort seeds by span and align them.
       qsort(seeds, chain->loci, sizeof(seed_t), seed_by_span);
 
-      for (int j = 1; j < chain->loci; j++) {
+      for (int j = 0; j < chain->loci; j++) {
 	 seed_t seed = seeds[j];
 	 // Do not align chained seeds.
 	 if (!seed.span) break;
