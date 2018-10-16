@@ -311,8 +311,7 @@ batchmap
          fprintf(stderr, "[%d]\n  score: %d\n  pos: %ld\n  MEMs:\n",
                i, a.score, a.refpos);
          for (int j = 0; j < a.nmem; j++) {
-
-            mem_t mem = a.mem[j];
+            mem_t mem = a.mem;
             fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
                   j, mem.beg, mem.end);
 

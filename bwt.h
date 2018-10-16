@@ -28,10 +28,9 @@ typedef struct lut_t      lut_t;
 typedef struct index_t    index_t;
 typedef struct occ_t      occ_t;
 typedef struct range_t    range_t;
-typedef struct mem_t      mem_t;
 typedef struct aln_t      aln_t;
 typedef struct alnstack_t alnstack_t;
-
+typedef struct mem_t      mem_t;
 
 typedef unsigned int uint_t;
 
@@ -131,7 +130,7 @@ struct aln_t {
    int          nmem;
    size_t       refpos;
    const char * refseq;
-   mem_t        mem[10];
+   mem_t        mem;
 };
 
 struct alnstack_t {
@@ -139,9 +138,6 @@ struct alnstack_t {
    size_t max;
    aln_t  aln[];
 };
-
-
-
 
 // VISIBLE FUNCTION DECLARATIONS //
 

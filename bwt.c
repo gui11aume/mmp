@@ -6,46 +6,80 @@
 
 // FIXME: The logic of the 'mem_t' struct is very weak and does not
 // FIXME: stand a chance on something else than the test data set.
-typedef struct memstack_t memstack_t;
-typedef struct seed_t seed_t;
+typedef struct memchain_t memchain_t;
+typedef struct seed_t     seed_t;
+typedef struct stack_t    stack_t;
 
 #define LEN 50
+#define DEBUG_VERBOSE 1
 
 #define min(x,y) ((x) < (y) ? (x) : (y))
 #define min3(x,y,z) (min(min(x,y),z))
 
-struct memstack_t {
-   size_t pos;
-   size_t max;
-   mem_t  mem[];
+struct memchain_t {
+   size_t    pos;
+   size_t    max;
+   size_t    loci;
+   int       minscore;
+   int       span;
+   mem_t  ** mem;
 };
 
 struct seed_t {
-   size_t refpos;
-   mem_t  mem;
+   size_t   refpos;
+   size_t   span;
+   mem_t  * mem;
 };
 
-memstack_t *  memstack_new (size_t max);
-void          mem_push     (mem_t mem, memstack_t ** stackp);
+struct stack_t {
+   size_t   pos;
+   size_t   max;
+   void   * ptr[];
+};
+
+
+memchain_t *  memchain_new (size_t max);
+void          mem_push     (mem_t * mem, memchain_t ** stackp);
 alnstack_t *  alnstack_new (size_t max);
 void          aln_push     (aln_t aln, alnstack_t ** stackp);
+stack_t    *  stack_new    (size_t max);
+void          push         (void * ptr, stack_t ** stackp);
 
 int           seed_by_refpos (const void * a, const void * b) {
    return ((seed_t *)a)->refpos > ((seed_t *)b)->refpos;
 };
+int           seed_by_span (const void * a, const void * b) {
+   return ((seed_t *)a)->span < ((seed_t *)b)->span;
+};
+
+int           mem_by_start (const void * a, const void * b) {
+   return (*(mem_t **)a)->beg > (*(mem_t **)b)->beg;
+};
+int           minscore_then_span (const void * a, const void * b) {
+   int sa = (*(memchain_t **)a)->minscore;
+   int sb = (*(memchain_t **)b)->minscore;
+   if (sa > sb)
+      return 1;
+   else if (sa < sb)
+      return -1;
+   else
+      return (*(memchain_t **)a)->span < (*(memchain_t **)b)->span;
+};
+
+
 
 const char ENCODE[256] = { ['c'] = 1, ['g'] = 2, ['t'] = 3,
-   ['C'] = 1, ['G'] = 2, ['T'] = 3 };
+			   ['C'] = 1, ['G'] = 2, ['T'] = 3 };
 const char REVCMP[256] = { ['g'] = 1, ['c'] = 2, ['a'] = 3,
-   ['G'] = 1, ['C'] = 2, ['A'] = 3 };
+			   ['G'] = 1, ['C'] = 2, ['A'] = 3 };
 
 
 // SECTION 1. MACROS //
 
 // Error-handling macros.
-#define exit_on_memory_error(x) \
+#define exit_on_memory_error(x)						\
    do { if ((x) == NULL) { fprintf(stderr, "memory error %s:%d:%s()\n", \
-         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
+				   __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
 
 
 // SECTION 2. GLOBAL CONSTANTS OF INTEREST //
@@ -53,60 +87,60 @@ const char REVCMP[256] = { ['g'] = 1, ['c'] = 2, ['a'] = 3,
 const char ALPHABET[4] = "ACGT";
 
 const uint8_t NONALPHABET[256] = {
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
 };
 
 const char REVCOMP[256] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0,'T',0,'G',0, 0, 0,'C',0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0,'A',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0,'T',0,'G',0, 0, 0,'C',0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0,'A',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0,'T',0,'G',0, 0, 0,'C',0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0,'A',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0,'T',0,'G',0, 0, 0,'C',0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0,'A',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
 };
 
 const char CAPS[256] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0,'A',0,'C',0, 0, 0,'G',0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0,'T',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0,'A',0,'C',0, 0, 0,'G',0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0,'T',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0,'A',0,'C',0, 0, 0,'G',0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0,'T',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0,'A',0,'C',0, 0, 0,'G',0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0,'T',0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
 };
 
 
@@ -118,8 +152,8 @@ const char CAPS[256] = {
 int64_t *
 compute_sa   // VISIBLE //
 (
-   const char * txt
-)
+ const char * txt
+ )
 {
 
    const size_t txtlen = strlen(txt) + 1;
@@ -135,8 +169,8 @@ compute_sa   // VISIBLE //
 csa_t *
 compress_sa
 (
-   int64_t * sa
-)
+ int64_t * sa
+ )
 {
 
    // The first entry of the suffix array is the length of the text.
@@ -183,9 +217,9 @@ compress_sa
 bwt_t *
 create_bwt
 (
-   const char    * txt,
-   const int64_t * sa
-)
+ const char    * txt,
+ const int64_t * sa
+ )
 {
 
    // Allocate new 'bwt_t'.
@@ -219,11 +253,11 @@ create_bwt
 void
 write_occ_blocks
 (
-   occ_t    * occ,
-   uint32_t * smpl,
-   uint32_t * bits,
-   size_t     idx    // Index of 'blocc_t' in array.
-)
+ occ_t    * occ,
+ uint32_t * smpl,
+ uint32_t * bits,
+ size_t     idx    // Index of 'blocc_t' in array.
+ )
 // Write 'SIGMA' smpl/bits blocks to the 'blocc_t' arrays of 'Occ'
 // at position 'pos' (the array index and not the position in
 // the bwt).
@@ -238,8 +272,8 @@ write_occ_blocks
 occ_t *
 create_occ
 (
-   const bwt_t * bwt
-)
+ const bwt_t * bwt
+ )
 {
 
    // Allocate new 'Occ_t'.
@@ -287,10 +321,10 @@ create_occ
 size_t
 get_rank
 (
-   const occ_t   * occ,
-         uint8_t   c,
-         size_t    pos
-)
+ const occ_t   * occ,
+ uint8_t   c,
+ size_t    pos
+ )
 {
    uint32_t smpl = occ->rows[c*occ->nrows + pos/32].smpl;
    uint32_t bits = occ->rows[c*occ->nrows + pos/32].bits;
@@ -304,12 +338,12 @@ get_rank
 void
 fill_lut
 (
-         lut_t   * lut,
-   const occ_t   * occ,
-   const range_t   range,
-   const size_t    depth,
-   const size_t    kmerid
-)
+ lut_t   * lut,
+ const occ_t   * occ,
+ const range_t   range,
+ const size_t    depth,
+ const size_t    kmerid
+ )
 {
    if (depth >= LUTK) {
       lut->kmer[kmerid] = range;
@@ -319,7 +353,7 @@ fill_lut
       size_t bot = get_rank(occ, c, range.bot - 1);
       size_t top = get_rank(occ, c, range.top) - 1;
       fill_lut(lut, occ, (range_t) { .bot=bot, .top=top },
-            depth+1, c + (kmerid << 2));
+	       depth+1, c + (kmerid << 2));
    }
 }
 
@@ -329,10 +363,10 @@ fill_lut
 range_t
 backward_search
 (
-   const char   * query,
-   const size_t   len,
-   const occ_t  * occ
-)
+ const char   * query,
+ const size_t   len,
+ const occ_t  * occ
+ )
 // Used to search a substring using 'occ' and 'C'.
 // In case the query is not found, the condition
 // 'range.top - range.bot == -1' is true.
@@ -357,11 +391,11 @@ backward_search
 size_t
 query_csa
 (
-   csa_t  * csa,
-   bwt_t  * bwt,
-   occ_t  * occ,
-   size_t   pos
-)
+ csa_t  * csa,
+ bwt_t  * bwt,
+ occ_t  * occ,
+ size_t   pos
+ )
 {
 
    if (pos == bwt->zero) return 0;
@@ -392,13 +426,13 @@ query_csa
 void
 recursive_csa_query
 (
-   csa_t  * csa,
-   bwt_t  * bwt,
-   occ_t  * occ,
-   range_t  range,
-   size_t * sa_values,
-   size_t   path_offset
-)
+ csa_t  * csa,
+ bwt_t  * bwt,
+ occ_t  * occ,
+ range_t  range,
+ size_t * sa_values,
+ size_t   path_offset
+ )
 {
    // Get sampled SA values.
    // Compute offset to the closest %16.
@@ -500,11 +534,11 @@ recursive_csa_query
 size_t *
 query_csa_range
 (
-   csa_t  * csa,
-   bwt_t  * bwt,
-   occ_t  * occ,
-   range_t  range
-)
+ csa_t  * csa,
+ bwt_t  * bwt,
+ occ_t  * occ,
+ range_t  range
+ )
 {
 
    size_t * sa_values = calloc((range.top - range.bot + 1), sizeof(size_t));
@@ -519,8 +553,8 @@ query_csa_range
 char *
 normalize_genome
 (
-   FILE * inputf
-)
+ FILE * inputf
+ )
 {
 
    // Read variables.
@@ -588,12 +622,12 @@ normalize_genome
 int
 nw
 (
-   const char   * seq1,
-   const char   * seq2,
-   const int      len1,
-   const int      len2,
-   const int      cutoff
-)
+ const char   * seq1,
+ const char   * seq2,
+ const int      len1,
+ const int      len2,
+ const int      cutoff
+ )
 // Place reference in seq1, you can add extra length to len1 to allocate insertions in seq2.
 {
    // Penalties (don't set i_p or d_p smaller than m_p!).
@@ -618,8 +652,8 @@ nw
       for (i = pos, left = col[pos], diag = row[i-1]; i < len1 && row[i-1] <= cutoff; i++) {
 	 int next_diag = row[i];
 	 left = row[i] = min3(diag + (CAPS[(int)seq1[i]] != CAPS[(int)seq2[pos]])*m_p,
-			 row[i] + i_p,
-			 left + d_p);
+			      row[i] + i_p,
+			      left + d_p);
 	 diag = next_diag;
 	 if (row[i] < score) score = row[i];
       }
@@ -650,12 +684,12 @@ nw
 int
 banded_needleman_wunsch
 (
-   const char   * seq1,
-   const char   * seq2,
-   const int      len1,
-   const size_t   sz,
-   const int      cutoff
-)
+ const char   * seq1,
+ const char   * seq2,
+ const int      len1,
+ const size_t   sz,
+ const int      cutoff
+ )
 {
 
    if (sz > 128) exit(EXIT_FAILURE);
@@ -711,89 +745,221 @@ banded_needleman_wunsch
 }
 
 
+void
+recursive_mem_chain
+(
+ stack_t  * mems,
+ size_t     mem_pos,
+ size_t     chain_pos,
+ mem_t   ** chain,
+ stack_t ** chain_stack
+ )
+{
+   size_t mem_end = ((mem_t *) mems->ptr[mem_pos])->end;
+   // For MEMs overlapping MEM[pos].
+   for (int i = mem_pos; ((mem_t *)mems->ptr[i])->beg <= mem_end; i++) {
+      // Extend chain.
+      chain[chain_pos] = (mem_t *) mems->ptr[i];
+      // Get next nonoverlapping MEM.
+      int j;
+      for (j = i+1; j < mems->pos; j++) {
+	 if (((mem_t *)mems->ptr[j])->beg > mem_end)
+	    break;
+      }
+      // We reached the chain end, store chain.
+      if (j >= mems->pos) {
+	 memchain_t * memchain = memchain_new(chain_pos);
+	 // Push mems to chain and compute span.
+	 int span = 0;
+	 size_t loci = 0;
+	 for (int k = 0; k < chain_pos; k++) {
+	    span += chain[k]->end - chain[k]->beg + 1;
+	    loci += chain[k]->range.top - chain[k]->range.bot + 1;
+	    mem_push(chain[k], &memchain);
+	 }
+	 // Push mem chain to chain stack.
+	 memchain->span = span;
+	 memchain->loci = loci;
+	 push(memchain, chain_stack);
+      } else {
+	 recursive_mem_chain(mems, j, chain_pos+1, chain, chain_stack);
+      }
+   }
+}
+
+
+stack_t *
+nonoverlapping_mems
+(
+ stack_t * mems
+ )
+{
+   // Alloc.
+   stack_t * chain_stack = stack_new(8);
+   mem_t  ** chain = malloc(mems->pos*sizeof(mem_t *));
+   exit_on_memory_error(chain);
+
+   // 1. Sort MEMs by start position.
+   qsort(mems->ptr, mems->pos, sizeof(mem_t *), mem_by_start);
+
+   // DEBUG VERBOSE
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout,"MEMs (%ld):\n", mems->pos);
+      for(int i = 0; i < mems->pos; i++) {
+	 mem_t * m = (mem_t *) mems->ptr[i];
+	 fprintf(stdout, "[%d] (%ld, %ld) range: (%ld, %ld)\n", i, m->beg, m->end, m->range.bot, m->range.top);
+      }
+      fprintf(stdout,"\n");
+   }
+   
+   // 2. Recursive call to mem group.
+   recursive_mem_chain(mems, 0, 0, chain, &chain_stack);
+   free(chain);
+   // 3. Return stack of non-overlapping MEM combinations.
+   return chain_stack;
+}
+
+
+int
+chain_min_score
+(
+ memchain_t * chain,
+ const int    gamma,
+ const int    seqlen
+ )
+{
+   int minscore = 0;
+
+   // Add mismatches at chain ends.
+   minscore += (chain->mem[0]->beg > 0) + (chain->mem[chain->pos-1]->end < seqlen-1);
+
+   // Add gap mismatches.
+   for (int i = 1; i < chain->pos; i++) {
+      // A gap implies one mismatch, even if it's a gap of length 0.
+      minscore++;
+      int gap_size = chain->mem[i]->beg - chain->mem[i-1]->end - 1;
+      minscore += gap_size > 1;
+      minscore += (gap_size-2)/gamma;
+   }
+
+   return minscore;
+}
+
+
 alnstack_t *
 align
 (
-   const index_t      idx,
-   const char       * seq,
-   const char       * genome,
-   const memstack_t * mems
-)
+ const index_t   idx,
+ const char    * seq,
+ const char    * genome,
+ stack_t       * mems,
+ const int       gamma
+ )
 {
-
    int slen = strlen(seq);
-   // Count loci.
-   
-   size_t nloc = 0;
-   for (int i = 0 ; i < mems->pos ; i++) {
-      mem_t mem = mems->mem[i];
-      nloc += mem.range.top - mem.range.bot + 1;
+
+   // Find all non-overlapping MEM combinations.
+   stack_t * chain_stack = nonoverlapping_mems(mems);
+
+   // Compute minimum alignment score given seed distribution.
+   for (int i = 0; i < chain_stack->pos; i++) {
+      memchain_t * chain = (memchain_t *)chain_stack->ptr[i];
+      chain->minscore = chain_min_score(chain, gamma, slen);
    }
 
-   // Allocate align positions (one per locus).
-   seed_t * seeds = malloc(nloc * sizeof(seed_t));
-   exit_on_memory_error(seeds);
+   // Sort mem chains by minscore(inc) then span(dec).
+   qsort(chain_stack, chain_stack->pos, sizeof(memchain_t *), minscore_then_span);
 
-   // Query SA.
-   for (int i = 0, j = 0; i < mems->pos; i++) {
-      mem_t mem = mems->mem[i];
-      // We still kinda need to chain the seeds.
-      /*
-      // THIS USES SINGLE CSA QUERY.
-      for (size_t pos = mem.range.bot ; pos <= mem.range.top ; pos++) {
-         size_t hitpos = query_csa(idx.csa, idx.bwt, idx.occ, pos);
-         seeds[j++] = (seed_t) {hitpos, mem};
+   // DEBUG VERBOSE
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout,"MEM chains (%ld):\n", chain_stack->pos);
+      for(int i = 0; i < chain_stack->pos; i++) {
+	 memchain_t * c = (memchain_t *) chain_stack->ptr[i];
+	 fprintf(stdout, "Chain [%d] (mems: %ld, span: %d, minscore: %d):\n", i, c->pos, c->span, c->minscore);
+	 for (int j = 0; j < 0; j++) {
+	    mem_t * m = c->mem[j];
+	    fprintf(stdout, "[%d] (%ld, %ld) range: (%ld, %ld)\n", i, m->beg, m->end, m->range.bot, m->range.top);
+	 }
       }
-      */
-
-      // RANGE CSA QUERY.
-      size_t * sa_values = query_csa_range(idx.csa, idx.bwt, idx.occ, mem.range);
-      for (size_t k = 0 ; k < mem.range.top - mem.range.bot + 1 ; k++) {
-         seeds[j++] = (seed_t) {sa_values[k], mem};
-      }
+      fprintf(stdout,"\n");
    }
 
-   // Sort by align position in the genome.
-   qsort(seeds, nloc, sizeof(seed_t), seed_by_refpos);
-
-   // Best alignment (low score is good).
-   int best_score = slen+1;
-   size_t last_locus = 0;
+   int best_score = slen;
    alnstack_t * best = alnstack_new(10);
    
-   // Align and chain mems.
-   for (int i = 0; i < nloc; i++) {
-      seed_t seed = seeds[i];
-      mem_t mem = seed.mem;
-      if (last_locus <= seed.refpos) { // Align.
-         const char * ref = genome + seed.refpos - mem.beg;
+   // Iterate over sorted MEM chains.
+   for (int i = 0; i < chain_stack->pos; i++) {
+      memchain_t * chain = (memchain_t *) chain_stack->ptr[i];
+
+      if (chain->minscore > best_score) break;
+
+      // Allocate seeds.
+      seed_t * seeds = malloc(chain->loci * sizeof(seed_t));
+      exit_on_memory_error(seeds);
+
+      // Get all genomic positions.
+      for (int j = 0, n = 0; j < chain->pos; j++) {
+	 mem_t * mem = chain->mem[j];
+	 // Compute SA positions.
+	 if (!mem->sa)
+	    mem->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, mem->range);
+
+	 // Make chained seeds from MEM genomic positions.
+	 for (int k = 0; k < mem->range.top - mem->range.bot + 1; k++) {
+	    seeds[n++] = (seed_t){mem->sa[k], mem->end - mem->beg + 1, mem};
+	 }
+      }
+
+      // Sort seeds by genomic position.
+      qsort(seeds, chain->loci, sizeof(seed_t), seed_by_refpos);
+
+      // Chain seeds to avoid duplicated alignments.
+      int cur = 0;
+      for (int j = 1; j < chain->loci; j++) {
+	 // Chain seeds if they are within 'slen' genomic nucleotides.
+	 if (seeds[j].refpos - seeds[cur].refpos < slen) {
+	    seeds[cur].span += (seeds[j].mem->end - seeds[j].mem->beg + 1);
+	    seeds[j].span = 0;
+	 } else {
+	    cur = j;
+	 }
+      }
+
+      // Sort seeds by span and align them.
+      qsort(seeds, chain->loci, sizeof(seed_t), seed_by_span);
+
+      for (int j = 1; j < chain->loci; j++) {
+	 seed_t seed = seeds[j];
+	 // Do not align chained seeds.
+	 if (!seed.span) break;
+
+	 mem_t * mem = seed.mem;
+         const char * ref = genome + seed.refpos - mem->beg;
          int score = nw(ref,
-               seq,
-               slen+3, // Allow 3 nucleotides to allocate insertions.
-               slen,
-               best_score + 1
-         );
+			seq,
+			slen+3, // Allow 3 nucleotides to allocate insertions.
+			slen,
+			best_score + 1
+			);
 	 
          // VERBOSE ALIGNMENT (DEBUG)
          fprintf(stderr, "%.*s %.*s %.*s\n",
-               (int)mem.beg, seq, (int) (mem.end - mem.beg + 1),
-               seq + mem.beg, (int)(slen-mem.end-1), seq + mem.end + 1);
+		 (int)mem->beg, seq, (int) (mem->end - mem->beg + 1),
+		 seq + mem->beg, (int)(slen-mem->end-1), seq + mem->end + 1);
          fprintf(stderr, "%.*s %.*s %.*s\nscore: %d\n--\n",
-               (int)mem.beg, ref, (int) (mem.end - mem.beg + 1),
-               ref + mem.beg, (int)(slen-mem.end-1), ref + mem.end + 1,
-               score);
+		 (int)mem->beg, ref, (int) (mem->end - mem->beg + 1),
+		 ref + mem->beg, (int)(slen-mem->end-1), ref + mem->end + 1,
+		 score);
 
          // Check align score.
          if (score <= best_score) {
-            // Reset chain anchor.
-            last_locus = seed.refpos + (slen - mem.beg);
             // Create new alignment.
             aln_t aln;
             aln.score  = score;
             aln.nmem   = 1;
             aln.refpos = seed.refpos;
             aln.refseq = ref;
-            aln.mem[0] = mem;
+            aln.mem    = *mem;
 
             if (score < best_score) {
                best_score = score;
@@ -805,11 +971,8 @@ align
                aln_push(aln, &best);
             }
          }
-
-      } else { // Chain. (Add mem to alignment)
-         fprintf(stderr, "* chain seed - alignment skipped\n--\n");
-         best->aln[best->pos-1].mem[best->aln[best->pos-1].nmem++] = mem;
       }
+      free(seeds);
    }
       
    // When we have the seed(s) that gave the best hit, we need to
@@ -819,7 +982,10 @@ align
    // For this, we need to keep more dense record of the seeding
    // process for every seed.
 
-   free(seeds);
+   for (int i = 0; i < chain_stack->pos; i++) {
+      free(chain_stack->ptr[i]);
+   }
+   free(chain_stack);
    return best;
 
 }
@@ -828,13 +994,12 @@ align
 alnstack_t *
 mapread
 (
-   const char    * seq,
-   const index_t   idx,
-   const char    * genome,
-   const size_t    gamma
-)
+ const char    * seq,
+ const index_t   idx,
+ const char    * genome,
+ const size_t    gamma
+ )
 {
-
    int len = strlen(seq);
 
    // TODO: the assert is super weak.
@@ -846,7 +1011,7 @@ mapread
    range_t newrange = {0};
 
    // Number of MEM seeds.
-   memstack_t * mems = memstack_new(50);
+   stack_t * mems = stack_new(50);
 
    while (1) {
 
@@ -861,31 +1026,31 @@ mapread
 
       // Look up the beginning (reverse) of the query in lookup table.
       if (end >= LUTK - 1) {
-         size_t merid = 0;
-         for ( ; mlen < LUTK ; mlen++, mpos--) {
-            uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
-            merid = c + (merid << 2);
-         }
-         range = idx.lut->kmer[merid];
-         mem.left[LUTK-1] = range.top - range.bot + 1;
+	 size_t merid = 0;
+	 for ( ; mlen < LUTK ; mlen++, mpos--) {
+	    uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
+	    merid = c + (merid << 2);
+	 }
+	 range = idx.lut->kmer[merid];
+	 mem.left[LUTK-1] = range.top - range.bot + 1;
       }
 
       // Cancel if we went too far already.
       if (range.top < range.bot) {
-         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-         mpos = end; mlen = 0;
+	 range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+	 mpos = end; mlen = 0;
       }
 
       for ( ; mpos >= 0 ; mpos--, mlen++) {
-         int c = ENCODE[(uint8_t) seq[mpos]];
-         newrange.bot = get_rank(idx.occ, c, range.bot - 1);
-         newrange.top = get_rank(idx.occ, c, range.top) - 1;
-         // Collect (reverse) cascade data.
-         mem.left[mlen] = newrange.top - newrange.bot + 1;
-         // Stop if no hits.
-         if (newrange.top < newrange.bot)
-            break;
-         range = newrange;
+	 int c = ENCODE[(uint8_t) seq[mpos]];
+	 newrange.bot = get_rank(idx.occ, c, range.bot - 1);
+	 newrange.top = get_rank(idx.occ, c, range.top) - 1;
+	 // Collect (reverse) cascade data.
+	 mem.left[mlen] = newrange.top - newrange.bot + 1;
+	 // Stop if no hits.
+	 if (newrange.top < newrange.bot)
+	    break;
+	 range = newrange;
       }
 
       mem.beg = ++mpos;
@@ -896,34 +1061,39 @@ mapread
       mlen = 0;
 
       if (end >= LUTK - 1) {
-         size_t merid = 0;
-         for ( ; mlen < LUTK ; mpos++, mlen++) {
-            uint8_t c = REVCMP[(uint8_t) seq[mpos]];
-            merid = c + (merid << 2);
-         }
-         range = idx.lut->kmer[merid];
-         mem.right[LUTK-1] = range.top - range.bot + 1;
+	 size_t merid = 0;
+	 for ( ; mlen < LUTK ; mpos++, mlen++) {
+	    uint8_t c = REVCMP[(uint8_t) seq[mpos]];
+	    merid = c + (merid << 2);
+	 }
+	 range = idx.lut->kmer[merid];
+	 mem.right[LUTK-1] = range.top - range.bot + 1;
       }
 
       // Cancel if we went too far already.
       if (range.top < range.bot) {
-         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-         mpos = mem.beg; mlen = 0;
+	 range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+	 mpos = mem.beg; mlen = 0;
       }
 
       for ( ; mpos <= end ; mpos++, mlen++) {
-         int c = REVCMP[(uint8_t) seq[mpos]];
-         range.bot = get_rank(idx.occ, c, range.bot - 1);
-         range.top = get_rank(idx.occ, c, range.top) - 1;
-         // Collect (forward) cascade data.
-         mem.right[mlen] = range.top - range.bot + 1;
-         // Stop if less than bw_hits.
-         if (range.top < range.bot)
-            break;
+	 int c = REVCMP[(uint8_t) seq[mpos]];
+	 range.bot = get_rank(idx.occ, c, range.bot - 1);
+	 range.top = get_rank(idx.occ, c, range.top) - 1;
+	 // Collect (forward) cascade data.
+	 mem.right[mlen] = range.top - range.bot + 1;
+	 // Stop if less than bw_hits.
+	 if (range.top < range.bot)
+	    break;
       }
 
       // Keep MEM if above minimum size.
-      if (mlen >= gamma) mem_push(mem, &mems);
+      if (mlen >= gamma) {
+	 mem_t * m = malloc(sizeof(mem_t));
+	 exit_on_memory_error(m);
+	 memcpy(m, &mem, sizeof(mem_t));
+	 push(m, &mems);
+      }
 
       if (mem.beg < 1) break;
 
@@ -931,24 +1101,22 @@ mapread
       range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
       end = mem.beg - 1;
       while (1) {
-         int c = REVCMP[(uint8_t) seq[end]];
-         range.bot = get_rank(idx.occ, c, range.bot - 1);
-         range.top = get_rank(idx.occ, c, range.top) - 1;
-         if (range.top < range.bot) {
-            end--;
-            break;
-         }
-         end++;
+	 int c = REVCMP[(uint8_t) seq[end]];
+	 range.bot = get_rank(idx.occ, c, range.bot - 1);
+	 range.top = get_rank(idx.occ, c, range.top) - 1;
+	 if (range.top < range.bot) {
+	    end--;
+	    break;
+	 }
+	 end++;
       }
 
       if (end + 1 < gamma) break;
 
    }
 
-   fprintf(stderr, "MEMS found: %ld\n-- Alignments --\n", mems->pos);
-
    // Return the best alignment(s) in an alignment stack.
-   alnstack_t * aln = align(idx, seq, genome, mems);
+   alnstack_t * aln = align(idx, seq, genome, mems, gamma);
 
    free(mems);
    return aln;
@@ -956,45 +1124,46 @@ mapread
 }
 
 
-memstack_t *
-memstack_new
+memchain_t *
+memchain_new
 (
  size_t max
-)
+ )
 {
-   size_t base = sizeof(memstack_t);
-   size_t extra = max * sizeof(mem_t);
-   memstack_t * stack = malloc(base + extra);
+   size_t base = sizeof(memchain_t);
+   size_t extra = max * sizeof(mem_t *);
+   memchain_t * stack = malloc(base + extra);
    exit_on_memory_error(stack);
 
    stack->max = max;
    stack->pos = 0;
-   return stack;
+   stack->minscore = 0;
+   stack->span = 0;
 
+   return stack;
 }
 
 
 void
 mem_push
 (
-  mem_t mem,
-  memstack_t ** stackp
-)
+ mem_t       * mem,
+ memchain_t ** stackp
+ )
 {
 
-   memstack_t * stack = *stackp;
+   memchain_t * stack = *stackp;
 
    if (stack->pos >= stack->max) {
       size_t newmax = stack->max*2;
       stack = *stackp = realloc(stack,
-            sizeof(memstack_t)+newmax*sizeof(mem_t));
+				sizeof(memchain_t)+newmax*sizeof(mem_t *));
       exit_on_memory_error(stack);
       stack->max = newmax;
    }
 
    stack->mem[stack->pos++] = mem;
    return;
-
 }
 
 
@@ -1002,7 +1171,7 @@ alnstack_t *
 alnstack_new
 (
  size_t max
-)
+ )
 {
    size_t base = sizeof(alnstack_t);
    size_t extra = max * sizeof(aln_t);
@@ -1012,26 +1181,61 @@ alnstack_new
    stack->max = max;
    stack->pos = 0;
    return stack;
-
 }
 
 
 void
 aln_push
 (
-  aln_t aln,
-  alnstack_t ** stackp
-)
+ aln_t aln,
+ alnstack_t ** stackp
+ )
 {
    alnstack_t * stack = *stackp;
    if (stack->pos >= stack->max) {
       size_t newmax = stack->max*2;
       stack = *stackp = realloc(stack,
-            sizeof(alnstack_t)+newmax*sizeof(aln_t));
+				sizeof(alnstack_t)+newmax*sizeof(aln_t));
       exit_on_memory_error(stack);
       stack->max = newmax;
    }
 
    stack->aln[stack->pos++] = aln;
+   return;
+}
+
+stack_t *
+stack_new
+(
+ size_t max
+ )
+{
+   size_t base = sizeof(stack_t);
+   size_t extra = max * sizeof(void *);
+   stack_t * stack = malloc(base + extra);
+   exit_on_memory_error(stack);
+
+   stack->max = max;
+   stack->pos = 0;
+   return stack;
+}
+
+void
+push
+(
+ void     * ptr,
+ stack_t ** stackp
+ )
+{
+   stack_t * stack = *stackp;
+   if (stack->pos >= stack->max) {
+      size_t newmax = stack->max*2;
+      stack = *stackp = realloc(stack,
+				sizeof(stack_t)+newmax*sizeof(void *));
+      exit_on_memory_error(stack);
+      stack->max = newmax;
+   }
+
+   stack->ptr[stack->pos++] = ptr;
    return;
 }
