@@ -64,9 +64,12 @@ build_index
    FILE * fasta = fopen(fname, "r");
    if (fasta == NULL) exit_cannot_open(fname);
 
+   char buff[256];
+
    // Read and normalize genome
+   sprintf(buff, "%s.chr", fname);
    fprintf(stderr, "reading genome... ");
-   char * genome = normalize_genome(fasta);
+   char * genome = normalize_genome(fasta, buff);
    fprintf(stderr, "done.\n");
 
    fprintf(stderr, "creating suffix array... ");
@@ -91,7 +94,6 @@ build_index
    fprintf(stderr, "done.\n");
 
    // Write files
-   char buff[256];
    char * data;
    ssize_t ws;
    size_t sz;
@@ -162,6 +164,10 @@ load_index
 
    size_t mmsz;
    char buff[256];
+
+   chr_t * chr = index_load_chr(fname);
+   exit_error(chr == NULL);
+
 
    sprintf(buff, "%s.sa", fname);
    int fsar = open(buff, O_RDONLY);
@@ -285,7 +291,7 @@ batchmap
    // Load the genome.
    FILE * fasta = fopen(indexfname, "r");
    if (fasta == NULL) exit_cannot_open(indexfname);
-   char * genome = normalize_genome(fasta);
+   char * genome = normalize_genome(fasta, NULL);
 
    fprintf(stderr, "done.\n");
    FILE * inputf = fopen(readsfname, "r");

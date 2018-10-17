@@ -257,6 +257,126 @@ create_occ
 
 }
 
+chr_t *
+index_load_chr
+(
+ const char * index_file
+)
+{
+
+   // Read chromosome index.
+   char chr_file[256];
+   sprintf(chr_file, "%s.chr", index_file);
+   // Files
+   FILE * input = fopen(chr_file,"r");
+   if (input == NULL) {
+      fprintf(stderr, "error in 'read_CHRindex' (fopen)\n");
+      exit(EXIT_FAILURE);
+   }
+
+   size_t chrcount = 0;
+   size_t structsize = 30;
+
+   size_t  * start = malloc(structsize*sizeof(size_t));
+   char   ** names = malloc(structsize*sizeof(char*));
+   char    * buffer = malloc(100);
+   if (start == NULL || names == NULL || buffer == NULL) return NULL;
+
+   // File read vars
+   ssize_t rlen;
+   size_t  sz = 100;
+   int lineno = 0;
+
+   // Read chromosome entries.
+   while ((rlen = getline(&buffer, &sz, input)) != -1) {
+      lineno++;
+      char *name;
+      int i = 0;
+      while (buffer[i] != '\t' && buffer[i] != '\n') i++;
+      if (buffer[i] == '\n') {
+         fprintf(stderr, "illegal format in %s (line %d) - ignoring chromosome: %s\n", index_file, lineno, buffer);
+         continue;
+      }
+      
+      if (buffer[rlen-1] == '\n') buffer[rlen-1] = 0;
+
+      // Realloc stacks if necessary.
+      if (chrcount >= structsize) {
+         structsize *= 2;
+         start = realloc(start, structsize*sizeof(long));
+         names = realloc(names, structsize*sizeof(char*));
+         if (start == NULL || names == NULL) {
+            fprintf(stderr, "error in 'read_CHRindex' (realloc)\n");
+            exit(EXIT_FAILURE);
+         }
+      }
+
+      // Save chromosome start position.
+      buffer[i] = 0;
+      start[chrcount] = atol(buffer);
+      // Save chromosome name.
+      name = buffer + i + 1;
+      names[chrcount] = malloc(strlen(name)+1);
+      if (names[chrcount] == NULL) return NULL;
+      strcpy(names[chrcount], name);
+      // Inc.
+      chrcount++;
+   }
+
+   // Return chromosome index structure.
+   chr_t * chrindex = malloc(sizeof(chr_t));
+   if (chrindex == NULL) return NULL;
+   chrindex->nchr = chrcount;
+   chrindex->start= start;
+   chrindex->name = names;
+
+   // Close files.
+   fclose(input);
+
+   // Free memory.
+   free(buffer);
+
+   return chrindex;
+}
+
+size_t
+bisect_search
+(
+ size_t   start,
+ size_t   end,
+ size_t * set,
+ size_t   value
+)
+{
+   if (start >= end - 1) {
+      if (value < set[start]) return start;
+      return (value >= set[end] ? end : start) + 1;
+   }
+   size_t middle = (start + end) / 2;
+   if (set[middle] >= value) return bisect_search(start, middle, set, value);
+   else return bisect_search(middle, end, set, value);
+}
+
+char *
+chr_string
+(
+ size_t   refpos,
+ chr_t  * chr
+)
+{
+   if (chr->nchr == 0)
+      return NULL;
+   int chrnum = 0;
+   if (chr->nchr > 1) {
+      chrnum = bisect_search(0, chr->nchr-1, chr->start, refpos+1)-1;
+   }
+   size_t chrpos = refpos - chr->start[chrnum]+1;
+   int   slen    = snprintf(NULL, 0, "%s:%ld", chr->name[chrnum], chrpos);
+   char * str    = malloc(slen+1);
+   sprintf(str, "%s:%ld", chr->name[0], refpos);
+   return str;
+}
+
 
 size_t
 get_rank
@@ -493,7 +613,8 @@ query_csa_range
 char *
 normalize_genome
 (
- FILE * inputf
+ FILE * inputf,
+ char * chrfile
  )
 {
 
@@ -509,9 +630,23 @@ normalize_genome
    char * genome = malloc(64); 
    exit_on_memory_error(genome);
 
+   // Chromosome file.
+   FILE * chrout = NULL;
+   if (chrfile) 
+      chrout = fopen(chrfile, "w");
+   
    // Load fasta file line by line and concatenate.
    while ((rlen = getline(&buffer, &sz, inputf)) != -1) {
-      if (buffer[0] == '>') continue;
+      if (buffer[0] == '>') {
+	 if (chrout) {
+	    buffer[rlen-1] = 0;
+	    int k = 0;
+	    while (buffer[k] != ' ' && buffer[k] != 0) k++;
+	    buffer[k] = 0;
+	    fprintf(chrout,"%ld\t%s\n",gsize,buffer+1);
+	 }
+	 continue;
+      }
       if (gbufsize < gsize + rlen) {
          while (gbufsize < gsize + rlen) gbufsize *= 2;
          char * rsz = realloc(genome, gbufsize);
@@ -553,6 +688,7 @@ normalize_genome
    genome[2*div] = '\0';
 
    // Clean up.
+   fclose(chrout);
    free(buffer);
 
    return genome;

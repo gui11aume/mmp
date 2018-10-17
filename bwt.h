@@ -27,6 +27,7 @@ typedef struct csa_t      csa_t;
 typedef struct lut_t      lut_t;
 typedef struct index_t    index_t;
 typedef struct occ_t      occ_t;
+typedef struct chr_t      chr_t;
 typedef struct range_t    range_t;
 
 typedef unsigned int uint_t;
@@ -106,6 +107,12 @@ struct bwt_t {
    uint8_t  slots[0];    // 2-bit characters.
 };
 
+// Chromosome list.
+struct chr_t {
+   size_t    nchr;
+   size_t  * start;
+   char   ** name;
+};
 // Lookup table 
 #define LUTK 12  // Size of k-mers in the LUT.
 struct lut_t { range_t kmer[1<<(2*LUTK)]; };
@@ -125,7 +132,8 @@ int64_t    * compute_sa(const char *);
 bwt_t      * create_bwt(const char *, const int64_t *);
 occ_t      * create_occ(const bwt_t *);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
-char       * normalize_genome(FILE *);
+char       * normalize_genome(FILE *, char *);
+chr_t      * index_load_chr(const char *);
 
 size_t       get_rank(const occ_t *, uint8_t, size_t);
 range_t      backward_search(const char *, const size_t, const occ_t *);
