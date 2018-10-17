@@ -28,11 +28,14 @@ typedef struct lut_t      lut_t;
 typedef struct index_t    index_t;
 typedef struct occ_t      occ_t;
 typedef struct range_t    range_t;
-typedef struct aln_t      aln_t;
-typedef struct alnstack_t alnstack_t;
-typedef struct mem_t      mem_t;
 
 typedef unsigned int uint_t;
+
+const uint8_t NONALPHABET[256];
+const char REVCOMP[256];
+const char CAPS[256];
+const char ENCODE[256];
+const char REVCMP[256];
 
 // Entries of the Occ table combine an Occ value (the cumulative
 // number of occurrences of the character in the bwt up to and
@@ -115,31 +118,6 @@ struct index_t {
    lut_t * lut;
 };
 
-struct mem_t {
-   size_t    beg;
-   size_t    end;
-   range_t   range;
-   size_t  * sa;
-   int       aligned;
-   // Decay cascades.
-   size_t    left[50];
-   size_t    right[50];
-};
-
-struct aln_t {
-   int          score;
-   int          nmem;
-   size_t       refpos;
-   const char * refseq;
-   mem_t        mem;
-};
-
-struct alnstack_t {
-   size_t pos;
-   size_t max;
-   aln_t  aln[];
-};
-
 // VISIBLE FUNCTION DECLARATIONS //
 
 csa_t      * compress_sa(int64_t *);
@@ -148,6 +126,10 @@ bwt_t      * create_bwt(const char *, const int64_t *);
 occ_t      * create_occ(const bwt_t *);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
 char       * normalize_genome(FILE *);
-alnstack_t * mapread (const char *, index_t, const char *, size_t);
+
+size_t       get_rank(const occ_t *, uint8_t, size_t);
+range_t      backward_search(const char *, const size_t, const occ_t *);
+size_t       query_csa(csa_t*, bwt_t*, occ_t*, size_t);
+size_t     * query_csa_range(csa_t *, bwt_t *, occ_t *, range_t);
 
 #endif

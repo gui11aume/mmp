@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "bwt.h"
+#include "map.h"
 #include "divsufsort.h"
 #include "mem_seed_prob.h"
 
