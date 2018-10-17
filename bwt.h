@@ -120,6 +120,7 @@ struct mem_t {
    size_t    end;
    range_t   range;
    size_t  * sa;
+   int       aligned;
    // Decay cascades.
    size_t    left[50];
    size_t    right[50];

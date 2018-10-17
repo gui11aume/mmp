@@ -11,6 +11,7 @@ typedef struct seed_t     seed_t;
 typedef struct stack_t    stack_t;
 
 #define LEN 50
+#define MAX_MINSCORE_REPEATS 2
 #define DEBUG_VERBOSE 1
 
 #define min(x,y) ((x) < (y) ? (x) : (y))
@@ -28,6 +29,7 @@ struct memchain_t {
 struct seed_t {
    size_t   refpos;
    size_t   span;
+   int      minscore;
    mem_t  * mem;
 };
 
@@ -48,8 +50,15 @@ void          push         (void * ptr, stack_t ** stackp);
 int           seed_by_refpos (const void * a, const void * b) {
    return ((seed_t *)a)->refpos > ((seed_t *)b)->refpos;
 };
-int           seed_by_span (const void * a, const void * b) {
-   return ((seed_t *)a)->span < ((seed_t *)b)->span;
+int           seed_by_minscore_then_span (const void * a, const void * b) {
+   seed_t * sa = (seed_t *)a;
+   seed_t * sb = (seed_t *)b;
+   if (sa->minscore > sb->minscore)
+      return 1;
+   else if (sa->minscore < sb->minscore)
+      return -1;
+   else
+      return sa->span < sb->span;
 };
 
 int           mem_by_start (const void * a, const void * b) {
@@ -897,10 +906,20 @@ align
    for (int i = 0; i < chain_stack->pos; i++) {
       memchain_t * chain = (memchain_t *) chain_stack->ptr[i];
 
-      if (chain->minscore > best_score) break;
-
       if (DEBUG_VERBOSE) {
-	 fprintf(stdout, "Aligning MEM chain %d:\n", i);
+	 fprintf(stdout, "[MEM chain %d]: mems: %ld, span: %d, loci: %ld, minscore: %d\n", i, chain->pos, chain->span, chain->loci, chain->minscore);
+      }
+
+      if (chain->minscore > best_score) {
+	 if (DEBUG_VERBOSE)
+	    fprintf(stdout, "[break: chain] chain.minscore > best_score\n");
+	 break;
+      }
+      
+      if (chain->minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS) {
+	 if (DEBUG_VERBOSE)
+	    fprintf(stdout, "[break: chain] %d+ alignments with best_score(%d)\n", MAX_MINSCORE_REPEATS, best_score);
+	 break;
       }
 
       // Allocate seeds.
@@ -910,13 +929,15 @@ align
       // Get all genomic positions.
       for (int j = 0, n = 0; j < chain->pos; j++) {
 	 mem_t * mem = chain->mem[j];
+	 if (mem->aligned)
+	    continue;
+	 mem->aligned = 1;
 	 // Compute SA positions.
 	 if (!mem->sa)
 	    mem->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, mem->range);
-
 	 // Make chained seeds from MEM genomic positions.
 	 for (int k = 0; k < mem->range.top - mem->range.bot + 1; k++) {
-	    seeds[n++] = (seed_t){mem->sa[k], mem->end - mem->beg + 1, mem};
+	    seeds[n++] = (seed_t){mem->sa[k], mem->end - mem->beg + 1, 0, mem};
 	 }
       }
 
@@ -925,42 +946,82 @@ align
 
       // Chain seeds to avoid duplicated alignments.
       int cur = 0;
+      memchain_t * seedchain = memchain_new(8);
+      mem_push(seeds[0].mem, &seedchain);
+
       for (int j = 1; j < chain->loci; j++) {
 	 // Chain seeds if they are within 'slen' genomic nucleotides.
 	 if (seeds[j].refpos - seeds[cur].refpos < slen) {
 	    seeds[cur].span += (seeds[j].mem->end - seeds[j].mem->beg + 1);
 	    seeds[j].span = 0;
+	    seeds[j].minscore = slen;
+	    mem_push(seeds[j].mem, &seedchain);
 	 } else {
+	    // Compute minimum score of seed chain.
+	    seeds[cur].minscore = chain_min_score(seedchain, gamma, slen);
+	    // Update current seed.
 	    cur = j;
+	    // Reset seed chain.
+	    seedchain->pos = 0;
+	    mem_push(seeds[cur].mem, &seedchain);
 	 }
       }
+      // Compute minimum score of last seed chain.
+      seeds[cur].minscore = chain_min_score(seedchain, gamma, slen);
+	    
+      free(seedchain);
 
       // Sort seeds by span and align them.
-      qsort(seeds, chain->loci, sizeof(seed_t), seed_by_span);
+      qsort(seeds, chain->loci, sizeof(seed_t), seed_by_minscore_then_span);
 
       for (int j = 0; j < chain->loci; j++) {
 	 seed_t seed = seeds[j];
 	 // Do not align chained seeds.
 	 if (!seed.span) break;
-
-	 mem_t * mem = seed.mem;
-         const char * ref = genome + seed.refpos - mem->beg;
-         int score = nw(ref,
-			seq,
-			slen+3, // Allow 3 nucleotides to allocate insertions.
-			slen,
-			best_score + 1
-			);
+	 if (DEBUG_VERBOSE)
+	    fprintf(stdout, "seed: refpos: %ld, span: %ld, minscore: %d\n", seed.refpos, seed.span, seed.minscore);
+	 // Stop when minscore > best.
+	 if (seed.minscore > best_score) {
+	    if (DEBUG_VERBOSE)
+	       fprintf(stdout, "[break: align] seed.minscore > best_score\n");
+	    break;
+	 }
+	 if (seed.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS) {
+	    if (DEBUG_VERBOSE)
+	       fprintf(stdout, "[break: align] %d+ alignments with best_score(%d)\n", MAX_MINSCORE_REPEATS, best_score);
+	    break;
+	 }
 	 
-         // VERBOSE ALIGNMENT (DEBUG)
-         fprintf(stderr, "%.*s %.*s %.*s\n",
-		 (int)mem->beg, seq, (int) (mem->end - mem->beg + 1),
-		 seq + mem->beg, (int)(slen-mem->end-1), seq + mem->end + 1);
-         fprintf(stderr, "%.*s %.*s %.*s\nscore: %d\n--\n",
-		 (int)mem->beg, ref, (int) (mem->end - mem->beg + 1),
-		 ref + mem->beg, (int)(slen-mem->end-1), ref + mem->end + 1,
-		 score);
+	 mem_t * mem = seed.mem;
+	 const char * ref = genome + seed.refpos - mem->beg;
+	 
+	 int score;
+	 // Do not align perfect seeds.
+	 if (mem->beg == 0 && mem->end == slen-1)	{
+	    score = 0;
+	    if (DEBUG_VERBOSE) 
+	       fprintf(stdout, "skip alignment: perfect seed -> score: 0\n");
 
+	 } else {
+	    score = nw(ref,
+		       seq,
+		       slen+3, // Allow 3 nucleotides to allocate insertions.
+		       slen,
+		       best_score + 1
+		       );
+	 
+	    // VERBOSE ALIGNMENT (DEBUG)
+	    if (DEBUG_VERBOSE) {
+	       fprintf(stdout, "locus: %ld (seed.minscore: %d, best_score: %d)\n", seed.refpos, seed.minscore, best_score);
+	       fprintf(stdout, "%.*s %.*s %.*s\n",
+		       (int)mem->beg, seq, (int) (mem->end - mem->beg + 1),
+		       seq + mem->beg, (int)(slen-mem->end-1), seq + mem->end + 1);
+	       fprintf(stdout, "%.*s %.*s %.*s\nscore: %d\n--\n",
+		       (int)mem->beg, ref, (int) (mem->end - mem->beg + 1),
+		       ref + mem->beg, (int)(slen-mem->end-1), ref + mem->end + 1,
+		       score);
+	    }
+	 }
          // Check align score.
          if (score <= best_score) {
             // Create new alignment.
@@ -1147,6 +1208,7 @@ memchain_new
 
    stack->max = max;
    stack->pos = 0;
+   stack->loci = 0;
    stack->minscore = 0;
    stack->span = 0;
 
