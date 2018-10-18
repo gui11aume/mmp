@@ -327,7 +327,7 @@ batchmap
             fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
                   j, mem.beg, mem.end);
 
-	    //            analyze_mem(mem);
+	    analyze_mem(mem);
 
             //fprintf(stderr, "   Left : ");
             //for (int r = GAMMA ; mem.left[r] > 0 ; r++) {
