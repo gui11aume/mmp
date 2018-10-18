@@ -366,29 +366,34 @@ align
       exit_on_memory_error(seeds);
 
       // Get all genomic positions.
-      for (int j = 0, n = 0; j < chain->pos; j++) {
+      size_t nloc = 0;
+      for (int j = 0; j < chain->pos; j++) {
 	 mem_t * mem = chain->mem[j];
-	 if (mem->aligned)
+	 if (mem->aligned) {
 	    continue;
+	 }
 	 mem->aligned = 1;
 	 // Compute SA positions.
 	 if (!mem->sa)
 	    mem->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, mem->range);
 	 // Make chained seeds from MEM genomic positions.
 	 for (int k = 0; k < mem->range.top - mem->range.bot + 1; k++) {
-	    seeds[n++] = (seed_t){mem->sa[k], mem->end - mem->beg + 1, 0, mem};
+	    seeds[nloc++] = (seed_t){mem->sa[k], mem->end - mem->beg + 1, 0, mem};
 	 }
       }
 
+      if (DEBUG_VERBOSE)
+	 fprintf(stdout, "[MEM chain %d]: %ld seeds after chaining/removing duplicates\n", i, nloc);
+
       // Sort seeds by genomic position.
-      qsort(seeds, chain->loci, sizeof(seed_t), seed_by_refpos);
+      qsort(seeds, nloc, sizeof(seed_t), seed_by_refpos);
 
       // Chain seeds to avoid duplicated alignments.
       int cur = 0;
       memchain_t * seedchain = memchain_new(8);
       mem_push(seeds[0].mem, &seedchain);
 
-      for (int j = 1; j < chain->loci; j++) {
+      for (int j = 1; j < nloc; j++) {
 	 // Chain seeds if they are within 'slen' genomic nucleotides.
 	 if (seeds[j].refpos - seeds[cur].refpos < slen) {
 	    seeds[cur].span += (seeds[j].mem->end - seeds[j].mem->beg + 1);
@@ -411,9 +416,9 @@ align
       free(seedchain);
 
       // Sort seeds by span and align them.
-      qsort(seeds, chain->loci, sizeof(seed_t), seed_by_minscore_then_span);
+      qsort(seeds, nloc, sizeof(seed_t), seed_by_minscore_then_span);
 
-      for (int j = 0; j < chain->loci; j++) {
+      for (int j = 0; j < nloc; j++) {
 	 seed_t seed = seeds[j];
 	 // Do not align chained seeds.
 	 if (!seed.span) break;
