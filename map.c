@@ -2,7 +2,6 @@
 
 typedef struct memchain_t memchain_t;
 typedef struct seed_t     seed_t;
-typedef struct stack_t    stack_t;
 
 #define LEN 50
 #define MAX_MINSCORE_REPEATS 2
@@ -27,18 +26,10 @@ struct seed_t {
    mem_t  * mem;
 };
 
-struct stack_t {
-   size_t   pos;
-   size_t   max;
-   void   * ptr[];
-};
-
 memchain_t *  memchain_new (size_t max);
 void          mem_push     (mem_t * mem, memchain_t ** stackp);
 alnstack_t *  alnstack_new (size_t max);
 void          aln_push     (aln_t aln, alnstack_t ** stackp);
-stack_t    *  stack_new    (size_t max);
-void          push         (void * ptr, stack_t ** stackp);
 
 int           seed_by_refpos (const void * a, const void * b) {
    return ((seed_t *)a)->refpos > ((seed_t *)b)->refpos;
@@ -426,8 +417,11 @@ align
 	 seed_t seed = seeds[j];
 	 // Do not align chained seeds.
 	 if (!seed.span) break;
-	 if (DEBUG_VERBOSE)
-	    fprintf(stdout, "seed: refpos: %ld, span: %ld, minscore: %d\n", seed.refpos, seed.span, seed.minscore);
+	 if (DEBUG_VERBOSE) {
+	    char * strpos  = chr_string(seed.refpos, idx.chr);
+	    fprintf(stdout, "seed: refpos: %ld (%s), span: %ld, minscore: %d\n", seed.refpos, strpos, seed.span, seed.minscore);
+	    free(strpos);
+	 }
 	 // Stop when minscore > best.
 	 if (seed.minscore > best_score) {
 	    if (DEBUG_VERBOSE)
@@ -721,41 +715,5 @@ aln_push
    }
 
    stack->aln[stack->pos++] = aln;
-   return;
-}
-
-stack_t *
-stack_new
-(
- size_t max
- )
-{
-   size_t base = sizeof(stack_t);
-   size_t extra = max * sizeof(void *);
-   stack_t * stack = malloc(base + extra);
-   exit_on_memory_error(stack);
-
-   stack->max = max;
-   stack->pos = 0;
-   return stack;
-}
-
-void
-push
-(
- void     * ptr,
- stack_t ** stackp
- )
-{
-   stack_t * stack = *stackp;
-   if (stack->pos >= stack->max) {
-      size_t newmax = stack->max*2;
-      stack = *stackp = realloc(stack,
-				sizeof(stack_t)+newmax*sizeof(void *));
-      exit_on_memory_error(stack);
-      stack->max = newmax;
-   }
-
-   stack->ptr[stack->pos++] = ptr;
    return;
 }

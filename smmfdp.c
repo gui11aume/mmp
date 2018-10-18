@@ -168,7 +168,7 @@ load_index
    chr_t * chr = index_load_chr(fname);
    exit_error(chr == NULL);
 
-
+   
    sprintf(buff, "%s.sa", fname);
    int fsar = open(buff, O_RDONLY);
    if (fsar < 0) exit_cannot_open(buff);
@@ -208,7 +208,7 @@ load_index
    exit_error(lut == NULL);
    close(flut);
 
-   return (index_t) { .csa = csa, .bwt = bwt, .occ = occ, .lut = lut };
+   return (index_t) {.chr = chr, .csa = csa, .bwt = bwt, .occ = occ, .lut = lut };
 
 }
 
@@ -291,6 +291,7 @@ batchmap
    // Load the genome.
    FILE * fasta = fopen(indexfname, "r");
    if (fasta == NULL) exit_cannot_open(indexfname);
+
    char * genome = normalize_genome(fasta, NULL);
 
    fprintf(stderr, "done.\n");

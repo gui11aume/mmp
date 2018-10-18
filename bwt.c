@@ -268,75 +268,37 @@ index_load_chr
    char chr_file[256];
    sprintf(chr_file, "%s.chr", index_file);
    // Files
-   FILE * input = fopen(chr_file,"r");
-   if (input == NULL) {
-      fprintf(stderr, "error in 'read_CHRindex' (fopen)\n");
-      exit(EXIT_FAILURE);
+   int fd = open(chr_file,O_RDONLY);
+
+   // Alloc structure.
+   chr_t * chr = malloc(sizeof(chr_t));
+   read(fd, &(chr->gsize), sizeof(size_t));
+   read(fd, &(chr->nchr), sizeof(size_t));
+   
+   size_t * start = malloc(chr->nchr * sizeof(size_t));
+   char  ** names = malloc(chr->nchr * sizeof(char *));
+   exit_on_memory_error(start);
+   exit_on_memory_error(names);
+
+   fprintf(stdout, "chr read: gsize: %ld, nchr:%ld\n", chr->gsize, chr->nchr);
+   
+   for (size_t i = 0; i < chr->nchr; i++) {
+      read(fd, start+i, sizeof(size_t));
+      size_t slen;
+      read(fd, &slen, sizeof(size_t));
+      char * name = malloc(slen);
+      exit_on_memory_error(name);
+      read(fd, name, slen);
+      names[i] = name;
+      fprintf(stdout, "chr: %s (%ld)\n", name, start[i]);
    }
 
-   size_t chrcount = 0;
-   size_t structsize = 30;
+   chr->start = start;
+   chr->name = names;
 
-   size_t  * start = malloc(structsize*sizeof(size_t));
-   char   ** names = malloc(structsize*sizeof(char*));
-   char    * buffer = malloc(100);
-   if (start == NULL || names == NULL || buffer == NULL) return NULL;
+   close(fd);
 
-   // File read vars
-   ssize_t rlen;
-   size_t  sz = 100;
-   int lineno = 0;
-
-   // Read chromosome entries.
-   while ((rlen = getline(&buffer, &sz, input)) != -1) {
-      lineno++;
-      char *name;
-      int i = 0;
-      while (buffer[i] != '\t' && buffer[i] != '\n') i++;
-      if (buffer[i] == '\n') {
-         fprintf(stderr, "illegal format in %s (line %d) - ignoring chromosome: %s\n", index_file, lineno, buffer);
-         continue;
-      }
-      
-      if (buffer[rlen-1] == '\n') buffer[rlen-1] = 0;
-
-      // Realloc stacks if necessary.
-      if (chrcount >= structsize) {
-         structsize *= 2;
-         start = realloc(start, structsize*sizeof(long));
-         names = realloc(names, structsize*sizeof(char*));
-         if (start == NULL || names == NULL) {
-            fprintf(stderr, "error in 'read_CHRindex' (realloc)\n");
-            exit(EXIT_FAILURE);
-         }
-      }
-
-      // Save chromosome start position.
-      buffer[i] = 0;
-      start[chrcount] = atol(buffer);
-      // Save chromosome name.
-      name = buffer + i + 1;
-      names[chrcount] = malloc(strlen(name)+1);
-      if (names[chrcount] == NULL) return NULL;
-      strcpy(names[chrcount], name);
-      // Inc.
-      chrcount++;
-   }
-
-   // Return chromosome index structure.
-   chr_t * chrindex = malloc(sizeof(chr_t));
-   if (chrindex == NULL) return NULL;
-   chrindex->nchr = chrcount;
-   chrindex->start= start;
-   chrindex->name = names;
-
-   // Close files.
-   fclose(input);
-
-   // Free memory.
-   free(buffer);
-
-   return chrindex;
+   return chr;
 }
 
 size_t
@@ -366,14 +328,21 @@ chr_string
 {
    if (chr->nchr == 0)
       return NULL;
+
+   char strand = '+';
+   if (refpos > chr->gsize) {
+      strand = '-';
+      refpos = 2*chr->gsize - refpos;
+   }
+      
    int chrnum = 0;
    if (chr->nchr > 1) {
       chrnum = bisect_search(0, chr->nchr-1, chr->start, refpos+1)-1;
    }
    size_t chrpos = refpos - chr->start[chrnum]+1;
-   int   slen    = snprintf(NULL, 0, "%s:%ld", chr->name[chrnum], chrpos);
+   int   slen    = snprintf(NULL, 0, "%s:%ld:%c", chr->name[chrnum], chrpos, strand);
    char * str    = malloc(slen+1);
-   sprintf(str, "%s:%ld", chr->name[0], refpos);
+   sprintf(str, "%s:%ld:%c", chr->name[chrnum], chrpos, strand);
    return str;
 }
 
@@ -613,8 +582,8 @@ query_csa_range
 char *
 normalize_genome
 (
- FILE * inputf,
- char * chrfile
+ FILE   * inputf,
+ char   * chrfile
  )
 {
 
@@ -631,19 +600,27 @@ normalize_genome
    exit_on_memory_error(genome);
 
    // Chromosome file.
-   FILE * chrout = NULL;
-   if (chrfile) 
-      chrout = fopen(chrfile, "w");
+   stack_t * seqnames = NULL;
+   stack_t * seqstart = NULL;
+   
+   if (chrfile) {
+      seqnames = stack_new(64);
+      seqstart = stack_new(64);
+   }
    
    // Load fasta file line by line and concatenate.
    while ((rlen = getline(&buffer, &sz, inputf)) != -1) {
       if (buffer[0] == '>') {
-	 if (chrout) {
+	 if (chrfile) {
 	    buffer[rlen-1] = 0;
 	    int k = 0;
 	    while (buffer[k] != ' ' && buffer[k] != 0) k++;
 	    buffer[k] = 0;
-	    fprintf(chrout,"%ld\t%s\n",gsize,buffer+1);
+	    char * seqname = strdup(buffer+1);
+	    push(seqname, &seqnames);
+	    size_t * gpos = malloc(sizeof(size_t));
+	    *gpos = gsize+1;
+	    push(gpos, &seqstart);
 	 }
 	 continue;
       }
@@ -656,6 +633,24 @@ normalize_genome
       int one_if_newline = (buffer[rlen-1] == '\n');
       strncpy(genome + gsize, buffer, rlen - one_if_newline);
       gsize += rlen - one_if_newline;
+   }
+
+   if (chrfile) {
+      int fd = open(chrfile, O_WRONLY | O_CREAT, 0664);
+      write(fd, &gsize, sizeof(size_t));
+      write(fd, &(seqnames->pos), sizeof(size_t));
+      for (size_t i = 0; i < seqnames->pos; i++) {
+	 write(fd, seqstart->ptr[i], sizeof(size_t));
+	 char * seqname = (char *) seqnames->ptr[i];
+	 size_t slen    = strlen(seqname)+1;
+	 write(fd, &slen, sizeof(size_t));
+	 write(fd, seqname, slen);
+	 free(seqstart->ptr[i]);
+	 free(seqnames->ptr[i]);
+      }
+      free(seqstart);
+      free(seqnames);
+      close(fd);
    }
 
    // Normalize (use only capital alphabet letters).
@@ -688,9 +683,44 @@ normalize_genome
    genome[2*div] = '\0';
 
    // Clean up.
-   fclose(chrout);
    free(buffer);
 
    return genome;
 
+}
+
+stack_t *
+stack_new
+(
+ size_t max
+ )
+{
+   size_t base = sizeof(stack_t);
+   size_t extra = max * sizeof(void *);
+   stack_t * stack = malloc(base + extra);
+   exit_on_memory_error(stack);
+
+   stack->max = max;
+   stack->pos = 0;
+   return stack;
+}
+
+void
+push
+(
+ void     * ptr,
+ stack_t ** stackp
+ )
+{
+   stack_t * stack = *stackp;
+   if (stack->pos >= stack->max) {
+      size_t newmax = stack->max*2;
+      stack = *stackp = realloc(stack,
+				sizeof(stack_t)+newmax*sizeof(void *));
+      exit_on_memory_error(stack);
+      stack->max = newmax;
+   }
+
+   stack->ptr[stack->pos++] = ptr;
+   return;
 }

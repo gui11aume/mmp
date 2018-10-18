@@ -8,6 +8,7 @@
 #include <strings.h>
 #include <sys/mman.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 
@@ -29,6 +30,7 @@ typedef struct index_t    index_t;
 typedef struct occ_t      occ_t;
 typedef struct chr_t      chr_t;
 typedef struct range_t    range_t;
+typedef struct stack_t    stack_t;
 
 typedef unsigned int uint_t;
 
@@ -109,6 +111,7 @@ struct bwt_t {
 
 // Chromosome list.
 struct chr_t {
+   size_t    gsize;
    size_t    nchr;
    size_t  * start;
    char   ** name;
@@ -119,11 +122,20 @@ struct lut_t { range_t kmer[1<<(2*LUTK)]; };
 
 // Index (everything).
 struct index_t {
+   chr_t * chr;
    csa_t * csa;
    bwt_t * bwt;
    occ_t * occ;
    lut_t * lut;
 };
+
+struct stack_t {
+   size_t   pos;
+   size_t   max;
+   void   * ptr[];
+};
+
+
 
 // VISIBLE FUNCTION DECLARATIONS //
 
@@ -134,10 +146,15 @@ occ_t      * create_occ(const bwt_t *);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
 char       * normalize_genome(FILE *, char *);
 chr_t      * index_load_chr(const char *);
+char       * chr_string(size_t, chr_t*);
 
 size_t       get_rank(const occ_t *, uint8_t, size_t);
 range_t      backward_search(const char *, const size_t, const occ_t *);
 size_t       query_csa(csa_t*, bwt_t*, occ_t*, size_t);
 size_t     * query_csa_range(csa_t *, bwt_t *, occ_t *, range_t);
+
+stack_t    *  stack_new    (size_t max);
+void          push         (void * ptr, stack_t ** stackp);
+
 
 #endif
