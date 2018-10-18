@@ -318,14 +318,16 @@ batchmap
 
       for (int i = 0; i < aln->pos; i++) {
          aln_t a = aln->aln[i];
-         fprintf(stderr, "[%d]\n  score: %d\n  pos: %ld\n  MEMs:\n",
-               i, a.score, a.refpos);
+	 char * apos = chr_string(a.refpos, idx.chr);
+         fprintf(stderr, "[%d] %s\n  score: %d\n  pos: %ld\n  MEMs:\n",
+		 i, apos, a.score, a.refpos);
+	 free(apos);
          for (int j = 0; j < a.nmem; j++) {
             mem_t mem = a.mem;
             fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
                   j, mem.beg, mem.end);
 
-            analyze_mem(mem);
+	    //            analyze_mem(mem);
 
             //fprintf(stderr, "   Left : ");
             //for (int r = GAMMA ; mem.left[r] > 0 ; r++) {

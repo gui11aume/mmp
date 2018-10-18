@@ -272,25 +272,27 @@ index_load_chr
 
    // Alloc structure.
    chr_t * chr = malloc(sizeof(chr_t));
-   read(fd, &(chr->gsize), sizeof(size_t));
-   read(fd, &(chr->nchr), sizeof(size_t));
+   ssize_t b;
+   b = read(fd, &(chr->gsize), sizeof(size_t));
+   if (b < 1) {
+      fprintf(stderr, "error reading chr index file\n");
+      exit(EXIT_FAILURE);
+   }
+   b = read(fd, &(chr->nchr), sizeof(size_t));
    
    size_t * start = malloc(chr->nchr * sizeof(size_t));
    char  ** names = malloc(chr->nchr * sizeof(char *));
    exit_on_memory_error(start);
    exit_on_memory_error(names);
 
-   fprintf(stdout, "chr read: gsize: %ld, nchr:%ld\n", chr->gsize, chr->nchr);
-   
    for (size_t i = 0; i < chr->nchr; i++) {
-      read(fd, start+i, sizeof(size_t));
+      b = read(fd, start+i, sizeof(size_t));
       size_t slen;
-      read(fd, &slen, sizeof(size_t));
+      b = read(fd, &slen, sizeof(size_t));
       char * name = malloc(slen);
       exit_on_memory_error(name);
-      read(fd, name, slen);
+      b = read(fd, name, slen);
       names[i] = name;
-      fprintf(stdout, "chr: %s (%ld)\n", name, start[i]);
    }
 
    chr->start = start;
@@ -332,14 +334,14 @@ chr_string
    char strand = '+';
    if (refpos > chr->gsize) {
       strand = '-';
-      refpos = 2*chr->gsize - refpos;
+      refpos = 2*chr->gsize - refpos - 1;
    }
       
    int chrnum = 0;
    if (chr->nchr > 1) {
       chrnum = bisect_search(0, chr->nchr-1, chr->start, refpos+1)-1;
    }
-   size_t chrpos = refpos - chr->start[chrnum]+1;
+   size_t chrpos = refpos+1 - (chr->start[chrnum]-1);
    int   slen    = snprintf(NULL, 0, "%s:%ld:%c", chr->name[chrnum], chrpos, strand);
    char * str    = malloc(slen+1);
    sprintf(str, "%s:%ld:%c", chr->name[chrnum], chrpos, strand);
@@ -637,14 +639,20 @@ normalize_genome
 
    if (chrfile) {
       int fd = open(chrfile, O_WRONLY | O_CREAT, 0664);
-      write(fd, &gsize, sizeof(size_t));
-      write(fd, &(seqnames->pos), sizeof(size_t));
+      ssize_t b;
+      b = write(fd, &gsize, sizeof(size_t));
+      if (b < 1) {
+	 fprintf(stderr, "error writing chr index file\n");
+	 exit(EXIT_FAILURE);
+      }
+	 
+      b = write(fd, &(seqnames->pos), sizeof(size_t));
       for (size_t i = 0; i < seqnames->pos; i++) {
-	 write(fd, seqstart->ptr[i], sizeof(size_t));
+	 b = write(fd, seqstart->ptr[i], sizeof(size_t));
 	 char * seqname = (char *) seqnames->ptr[i];
 	 size_t slen    = strlen(seqname)+1;
-	 write(fd, &slen, sizeof(size_t));
-	 write(fd, seqname, slen);
+	 b = write(fd, &slen, sizeof(size_t));
+	 b = write(fd, seqname, slen);
 	 free(seqstart->ptr[i]);
 	 free(seqnames->ptr[i]);
       }

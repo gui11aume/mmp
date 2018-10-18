@@ -346,7 +346,7 @@ align
       memchain_t * chain = (memchain_t *) chain_stack->ptr[i];
 
       if (DEBUG_VERBOSE) {
-	 fprintf(stdout, "[MEM chain %d]: mems: %ld, span: %d, loci: %ld, minscore: %d\n", i, chain->pos, chain->span, chain->loci, chain->minscore);
+	 fprintf(stdout, "[MEM chain %d] mems: %ld, span: %d, loci: %ld, minscore: %d\n", i, chain->pos, chain->span, chain->loci, chain->minscore);
       }
 
       if (chain->minscore > best_score) {
@@ -383,7 +383,7 @@ align
       }
 
       if (DEBUG_VERBOSE)
-	 fprintf(stdout, "[MEM chain %d]: %ld seeds after chaining/removing duplicates\n", i, nloc);
+	 fprintf(stdout, "[MEM chain %d] %ld seeds after removing duplicates\n", i, nloc);
 
       // Sort seeds by genomic position.
       qsort(seeds, nloc, sizeof(seed_t), seed_by_refpos);
@@ -393,9 +393,15 @@ align
       memchain_t * seedchain = memchain_new(8);
       mem_push(seeds[0].mem, &seedchain);
 
+      size_t chain_gap_beg = seeds[cur].refpos + (seeds[cur].mem->end - seeds[cur].mem->beg + 1);
+      size_t chain_gap_end = seeds[cur].refpos + (slen - seeds[cur].mem->beg) - 1;
+
+      size_t nchain = 1;
       for (int j = 1; j < nloc; j++) {
 	 // Chain seeds if they are within 'slen' genomic nucleotides.
-	 if (seeds[j].refpos - seeds[cur].refpos < slen) {
+	 size_t seed_ref_beg = seeds[j].refpos;
+	 size_t seed_ref_end = seed_ref_beg + (seeds[j].mem->end - seeds[j].mem->beg);
+	 if (chain_gap_beg <= seed_ref_beg && seed_ref_end <= chain_gap_end) {
 	    seeds[cur].span += (seeds[j].mem->end - seeds[j].mem->beg + 1);
 	    seeds[j].span = 0;
 	    seeds[j].minscore = slen;
@@ -408,8 +414,17 @@ align
 	    // Reset seed chain.
 	    seedchain->pos = 0;
 	    mem_push(seeds[cur].mem, &seedchain);
+	    // Update gap coordinates.
+	    chain_gap_beg = seeds[cur].refpos + (seeds[cur].mem->end - seeds[cur].mem->beg + 1);
+	    chain_gap_end = seeds[cur].refpos + (slen - seeds[cur].mem->beg) - 1;
+	    // Update chain count.
+	    nchain++;
 	 }
       }
+
+      if (DEBUG_VERBOSE)
+	 fprintf(stdout, "[MEM chain %d] %ld seeds after chaining\n", i, nchain);
+	    
       // Compute minimum score of last seed chain.
       seeds[cur].minscore = chain_min_score(seedchain, gamma, slen);
 	    
@@ -475,7 +490,7 @@ align
             aln_t aln;
             aln.score  = score;
             aln.nmem   = 1;
-            aln.refpos = seed.refpos;
+            aln.refpos = seed.refpos - mem->beg;
             aln.refseq = ref;
             aln.mem    = *mem;
 
@@ -635,6 +650,9 @@ mapread
 
    // Return the best alignment(s) in an alignment stack.
    alnstack_t * aln = align(idx, seq, genome, mems, gamma);
+
+   for (size_t i = 0; i < mems->pos; i++)
+      free(mems->ptr[i]);
 
    free(mems);
    return aln;
