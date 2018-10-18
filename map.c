@@ -382,6 +382,11 @@ align
 	 }
       }
 
+      if (nloc == 0) {
+	 fprintf(stdout, "[skip: chain] No seeds after removing duplicates\n");
+	 continue;
+      }
+
       if (DEBUG_VERBOSE)
 	 fprintf(stdout, "[MEM chain %d] %ld seeds after removing duplicates\n", i, nloc);
 
