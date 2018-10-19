@@ -4,6 +4,7 @@ typedef struct memchain_t memchain_t;
 typedef struct seed_t     seed_t;
 
 #define LEN 50
+#define MEM_MAX_LOCI 1000
 #define MAX_MINSCORE_REPEATS 2
 #define DEBUG_VERBOSE 1
 
@@ -250,16 +251,6 @@ nonoverlapping_mems
    // 1. Sort MEMs by start position.
    qsort(mems->ptr, mems->pos, sizeof(mem_t *), mem_by_start);
 
-   // DEBUG VERBOSE
-   if (DEBUG_VERBOSE) {
-      fprintf(stdout,"\nMEMs (%ld):\n", mems->pos);
-      for(int i = 0; i < mems->pos; i++) {
-	 mem_t * m = (mem_t *) mems->ptr[i];
-	 fprintf(stdout, "[%d] (%ld, %ld) range: (%ld, %ld)\n", i, m->beg, m->end, m->range.bot, m->range.top);
-      }
-      fprintf(stdout,"\n");
-   }
-   
    // 2. Recursive call to mem group.
    recursive_mem_chain(mems, 0, 0, chain, &chain_stack);
    free(chain);
@@ -310,6 +301,28 @@ align
  )
 {
    int slen = strlen(seq);
+
+   // DEBUG VERBOSE
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout,"\nMEMs (%ld):\n", mems->pos);
+      for(int i = 0; i < mems->pos; i++) {
+	 mem_t * m = (mem_t *) mems->ptr[i];
+	 fprintf(stdout, "[%d] (%ld, %ld) range: (%ld, %ld)\n", i, m->beg, m->end, m->range.bot, m->range.top);
+      }
+      fprintf(stdout,"\n");
+   }
+
+   // Filter repeats > MEM_MAX_LOCI.
+   for (size_t i = 0; i < mems->pos; i++) {
+      mem_t * m = (mem_t *) mems->ptr[i];
+      size_t  mem_loci = m->range.top - m->range.bot + 1;
+      if (mem_loci > MEM_MAX_LOCI) {
+	 m->range.top = m->range.bot + MEM_MAX_LOCI - 1;
+	 if (DEBUG_VERBOSE)
+	    fprintf(stdout, "[MEM %ld] too many loci (%ld > MEM_MAX_LOCI(%d))\n", i, mem_loci, MEM_MAX_LOCI);
+      }
+   }
+
 
    // Find all non-overlapping MEM combinations.
    stack_t * chain_stack = nonoverlapping_mems(mems);
@@ -406,7 +419,7 @@ align
 	 // Chain seeds if they are within 'slen' genomic nucleotides.
 	 size_t seed_ref_beg = seeds[j].refpos;
 	 size_t seed_ref_end = seed_ref_beg + (seeds[j].mem->end - seeds[j].mem->beg);
-	 if (chain_gap_beg <= seed_ref_beg && seed_ref_end <= chain_gap_end) {
+	 if (seeds[cur].mem != seeds[j].mem && chain_gap_beg <= seed_ref_beg && seed_ref_end <= chain_gap_end) {
 	    seeds[cur].span += (seeds[j].mem->end - seeds[j].mem->beg + 1);
 	    seeds[j].span = 0;
 	    seeds[j].minscore = slen;
