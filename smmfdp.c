@@ -214,7 +214,7 @@ load_index
 }
 
 
-void
+double
 analyze_mem
 (
    mem_t mem
@@ -268,11 +268,7 @@ analyze_mem
 
    }
 
-   fprintf(stderr, "N0 = %ld, mu = %.2f\n", best_N0, best_mu);
-   double prob = mem_false_pos(50, best_mu, best_N0);
-   fprintf(stderr, "False prob: %f\n", prob);
-
-   return;
+   return mem_false_pos(50, best_mu, best_N0);
 
 }
 
@@ -311,25 +307,15 @@ batchmap
    while ((rlen = getline(&seq, &sz, inputf)) != -1) {
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
 
-      fprintf(stderr, "[%s]\n", seq);
       alnstack_t * aln = mapread(seq, idx, genome, GAMMA);
 
-      // VERBOSE (DEBUG).
-      fprintf(stderr, "Best alignment(s):\n");
+      // Take the first alignment and hope it is random.
+      aln_t a = aln->aln[0];
+      char * apos = chr_string(a.refpos, idx.chr);
+      double prob = aln->pos > 1 ? 0.0 : analyze_mem(a.mem);
+      fprintf(stdout, "%s\t%s\t%f\n", seq, apos, prob);
+      free(apos);
 
-      for (int i = 0; i < aln->pos; i++) {
-         aln_t a = aln->aln[i];
-         char * apos = chr_string(a.refpos, idx.chr);
-         fprintf(stderr, "[%d] %s\n  score: %d\n  pos: %ld\n  MEMs:\n",
-               i, apos, a.score, a.refpos);
-         free(apos);
-         //analyze_mem(mem);
-         //for (int j = 0; j < a.nmem; j++) {
-         //   mem_t mem = a.mem;
-         //   fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
-         //         j, mem.beg, mem.end);
-         //}
-      }
       free(aln);
    }
 

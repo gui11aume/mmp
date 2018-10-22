@@ -6,7 +6,11 @@ typedef struct seed_t     seed_t;
 #define LEN 50
 #define MEM_MAX_LOCI 1000
 #define MAX_MINSCORE_REPEATS 2
-#define DEBUG_VERBOSE 1
+
+int DEBUG_VERBOSE = 0;
+#ifdef DEBUG
+DEBUG_VERBOSE = 1;
+#endif
 
 #define min(x,y) ((x) < (y) ? (x) : (y))
 #define min3(x,y,z) (min(min(x,y),z))
