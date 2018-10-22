@@ -208,7 +208,8 @@ load_index
    exit_error(lut == NULL);
    close(flut);
 
-   return (index_t) {.chr = chr, .csa = csa, .bwt = bwt, .occ = occ, .lut = lut };
+   return (index_t) {.chr = chr, .csa = csa, .bwt = bwt,
+      .occ = occ, .lut = lut };
 
 }
 
@@ -318,27 +319,16 @@ batchmap
 
       for (int i = 0; i < aln->pos; i++) {
          aln_t a = aln->aln[i];
-	 char * apos = chr_string(a.refpos, idx.chr);
+         char * apos = chr_string(a.refpos, idx.chr);
          fprintf(stderr, "[%d] %s\n  score: %d\n  pos: %ld\n  MEMs:\n",
-		 i, apos, a.score, a.refpos);
-	 free(apos);
-         for (int j = 0; j < a.nmem; j++) {
-            mem_t mem = a.mem;
-            fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
-                  j, mem.beg, mem.end);
-
-	    analyze_mem(mem);
-
-            //fprintf(stderr, "   Left : ");
-            //for (int r = GAMMA ; mem.left[r] > 0 ; r++) {
-            //   fprintf(stderr, "%zu ", mem.left[r]);
-            //}
-            //fprintf(stderr, "\n   Right: ");
-            //for (int r = GAMMA ; mem.right[r] > 0 ; r++) {
-            //   fprintf(stderr, "%zu ", mem.right[r]);
-            //}
-            //fprintf(stderr, "\n");
-         }
+               i, apos, a.score, a.refpos);
+         free(apos);
+         //analyze_mem(mem);
+         //for (int j = 0; j < a.nmem; j++) {
+         //   mem_t mem = a.mem;
+         //   fprintf(stderr, "   [%d] beg: %ld, end: %ld\n",
+         //         j, mem.beg, mem.end);
+         //}
       }
       free(aln);
    }

@@ -268,7 +268,7 @@ index_load_chr
    char chr_file[256];
    sprintf(chr_file, "%s.chr", index_file);
    // Files
-   int fd = open(chr_file,O_RDONLY);
+   int fd = open(chr_file, O_RDONLY);
 
    // Alloc structure.
    chr_t * chr = malloc(sizeof(chr_t));
@@ -301,7 +301,9 @@ index_load_chr
    close(fd);
 
    return chr;
+
 }
+
 
 size_t
 bisect_search
@@ -613,18 +615,18 @@ normalize_genome
    // Load fasta file line by line and concatenate.
    while ((rlen = getline(&buffer, &sz, inputf)) != -1) {
       if (buffer[0] == '>') {
-	 if (chrfile) {
-	    buffer[rlen-1] = 0;
-	    int k = 0;
-	    while (buffer[k] != ' ' && buffer[k] != 0) k++;
-	    buffer[k] = 0;
-	    char * seqname = strdup(buffer+1);
-	    push(seqname, &seqnames);
-	    size_t * gpos = malloc(sizeof(size_t));
-	    *gpos = gsize+1;
-	    push(gpos, &seqstart);
-	 }
-	 continue;
+         if (chrfile) {
+            buffer[rlen-1] = 0;
+            int k = 0;
+            while (buffer[k] != ' ' && buffer[k] != 0) k++;
+            buffer[k] = 0;
+            char * seqname = strdup(buffer+1);
+            push(seqname, &seqnames);
+            size_t * gpos = malloc(sizeof(size_t));
+            *gpos = gsize+1;
+            push(gpos, &seqstart);
+         }
+         continue;
       }
       if (gbufsize < gsize + rlen) {
          while (gbufsize < gsize + rlen) gbufsize *= 2;
@@ -642,36 +644,46 @@ normalize_genome
       ssize_t b;
       b = write(fd, &gsize, sizeof(size_t));
       if (b < 1) {
-	 fprintf(stderr, "error writing chr index file\n");
-	 exit(EXIT_FAILURE);
+         fprintf(stderr, "error writing chr index file\n");
+         exit(EXIT_FAILURE);
       }
-	 
+
       b = write(fd, &(seqnames->pos), sizeof(size_t));
       for (size_t i = 0; i < seqnames->pos; i++) {
-	 b = write(fd, seqstart->ptr[i], sizeof(size_t));
-	 char * seqname = (char *) seqnames->ptr[i];
-	 size_t slen    = strlen(seqname)+1;
-	 b = write(fd, &slen, sizeof(size_t));
-	 b = write(fd, seqname, slen);
-	 free(seqstart->ptr[i]);
-	 free(seqnames->ptr[i]);
+         b = write(fd, seqstart->ptr[i], sizeof(size_t));
+         char * seqname = (char *) seqnames->ptr[i];
+         size_t slen    = strlen(seqname)+1;
+         b = write(fd, &slen, sizeof(size_t));
+         b = write(fd, seqname, slen);
+         free(seqstart->ptr[i]);
+         free(seqnames->ptr[i]);
       }
       free(seqstart);
       free(seqnames);
       close(fd);
    }
 
-   // Normalize (use only capital alphabet letters).
-   for (size_t pos = 0; pos < gsize ; pos++) {
-      int iter = 0;
-      if (NONALPHABET[(uint8_t) genome[pos]]) {
-         // Replace by cycling over (A,C,G,T).
-         genome[pos] = ALPHABET[iter++ % 4];
-      }
-      else {
-         // Use only capital letters (important for
-         // sorting the suffixes in lexicographic order).
-         genome[pos] = toupper(genome[pos]);
+   // FIXME //
+   // Here we assume that if NULL is passed as a second parameter,
+   // then the caller wants to read the index and we do nothing special.
+   // be capitalized. Otherwise we assume the caller wants to create
+   // the index and the genome must This is not good: we should pass a
+   // flag to tell whether capitalization should be performed, or change
+   // the logic of this part entirely.
+  
+   if (chrfile != NULL) {
+      // Normalize (use only capital alphabet letters).
+      for (size_t pos = 0; pos < gsize ; pos++) {
+         int iter = 0;
+         if (NONALPHABET[(uint8_t) genome[pos]]) {
+            // Replace by cycling over (A,C,G,T).
+            genome[pos] = ALPHABET[iter++ % 4];
+         }
+         else {
+            // Use only capital letters (important for
+            // sorting the suffixes in lexicographic order).
+            genome[pos] = toupper(genome[pos]);
+         }
       }
    }
 
