@@ -309,11 +309,12 @@ batchmap
 
       alnstack_t * aln = mapread(seq, idx, genome, GAMMA);
 
+      if (!aln) exit(EXIT_FAILURE);
       // Take the first alignment and hope it is random.
       aln_t a = aln->aln[0];
       char * apos = chr_string(a.refpos, idx.chr);
-      double prob = aln->pos > 1 ? 0.0 : analyze_mem(a.mem);
-      fprintf(stdout, "%s\t%s\t%f\n", seq, apos, prob);
+      double prob = aln->pos > 1 ? .5 : analyze_mem(a.mem);
+      fprintf(stderr, "%s\t%s\t%f\n", seq, apos, prob);
       free(apos);
 
       free(aln);
