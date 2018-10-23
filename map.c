@@ -403,8 +403,9 @@ align
 	 }
       }
 
-      if (nloc == 0 && DEBUG_VERBOSE) {
-	 fprintf(stdout, "[skip: chain] No seeds after removing duplicates\n");
+      if (nloc == 0) {
+	 if (DEBUG_VERBOSE)
+	    fprintf(stdout, "[skip: chain] No seeds after removing duplicates\n");
 	 continue;
       }
 
