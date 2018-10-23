@@ -566,6 +566,11 @@ mapread
    assert(len <= LEN);
 
    int end = len-1;
+   while (end > 0 && NONALPHABET[(uint8_t)seq[end]]) end--;
+   
+   if (end == 0) {
+      return alnstack_new(1);
+   }
 
    range_t range = {0};
    range_t newrange = {0};
@@ -602,6 +607,7 @@ mapread
       }
 
       for ( ; mpos >= 0 ; mpos--, mlen++) {
+	 if (NONALPHABET[(uint8_t)seq[mpos]]) break;
 	 int c = ENCODE[(uint8_t) seq[mpos]];
 	 newrange.bot = get_rank(idx.occ, c, range.bot - 1);
 	 newrange.top = get_rank(idx.occ, c, range.top) - 1;
@@ -620,7 +626,7 @@ mapread
       range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
       mlen = 0;
 
-      if (end >= LUTK - 1) {
+      if (end + 1 >= LUTK && end - mpos + 1 >= LUTK) {
 	 size_t merid = 0;
 	 for ( ; mlen < LUTK ; mpos++, mlen++) {
 	    uint8_t c = REVCMP[(uint8_t) seq[mpos]];
@@ -637,6 +643,7 @@ mapread
       }
 
       for ( ; mpos <= end ; mpos++, mlen++) {
+	 if (NONALPHABET[(uint8_t) seq[mpos]]) break;
 	 int c = REVCMP[(uint8_t) seq[mpos]];
 	 range.bot = get_rank(idx.occ, c, range.bot - 1);
 	 range.top = get_rank(idx.occ, c, range.top) - 1;
@@ -658,21 +665,24 @@ mapread
       if (mem.beg < 1) break;
 
       // Find new end position (forward).
-      range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
       end = mem.beg - 1;
-      while (1) {
-	 int c = REVCMP[(uint8_t) seq[end]];
-	 range.bot = get_rank(idx.occ, c, range.bot - 1);
-	 range.top = get_rank(idx.occ, c, range.top) - 1;
-	 if (range.top < range.bot) {
-	    end--;
-	    break;
+      if (NONALPHABET[(uint8_t) seq[end]]) {
+	 while (end > 0 && NONALPHABET[(uint8_t) seq[end]]) end--;
+      } else {
+	 range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+	 while (1) {
+	    int c = REVCMP[(uint8_t) seq[end]];
+	    range.bot = get_rank(idx.occ, c, range.bot - 1);
+	    range.top = get_rank(idx.occ, c, range.top) - 1;
+	    if (range.top < range.bot) {
+	       end--;
+	       break;
+	    }
+	    end++;
 	 }
-	 end++;
       }
-
+      
       if (end + 1 < gamma) break;
-
    }
 
    // Return the best alignment(s) in an alignment stack.
