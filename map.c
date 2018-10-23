@@ -222,7 +222,7 @@ recursive_mem_chain
       }
       // We reached the chain end, store chain.
       if (j >= mems->pos) {
-	 memchain_t * memchain = memchain_new(chain_pos);
+	 memchain_t * memchain = memchain_new(chain_pos+1);
 	 // Push mems to chain and compute span.
 	 int span = 0;
 	 size_t loci = 0;
@@ -335,7 +335,10 @@ align
    // Compute minimum alignment score given seed distribution.
    for (int i = 0; i < chain_stack->pos; i++) {
       memchain_t * chain = (memchain_t *)chain_stack->ptr[i];
-      chain->minscore = chain_min_score(chain, gamma, slen);
+      if (chain->pos)
+	 chain->minscore = chain_min_score(chain, gamma, slen);
+      else
+	 fprintf(stderr, "OJOOOOOOOOOOOOOOOOOOOOOOOOOO AQUI UN CHAIN SENSE MEMS!");
    }
 
    // Sort mem chains by minscore(inc) then span(dec).
