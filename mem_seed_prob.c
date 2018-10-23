@@ -310,10 +310,11 @@ destroy_hash
 //   Free the memory for all entries of the golbal hash 'HTAB'.
 {
    for (int i = 0 ; i < HSIZE ; i++) {
-      for (rec_t *rec = HTAB[i] ; rec != NULL ; rec = rec->next) {
-         // Free record, don't erase pointer value.
+      for (rec_t *rec = HTAB[i] ; rec != NULL ; ) {
+         rec_t *next = rec->next;
          free(rec->prob);
          free(rec);
+         rec = next;
       }    
       HTAB[i] = NULL;
    }
