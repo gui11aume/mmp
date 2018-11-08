@@ -135,70 +135,6 @@ nw
 }
 
 
-int
-banded_needleman_wunsch
-(
- const char   * seq1,
- const char   * seq2,
- const int      len1,
- const size_t   sz,
- const int      cutoff
- )
-{
-
-   if (sz > 128) exit(EXIT_FAILURE);
-
-   int x;  // Mis/Match.
-   int y;  // Insertion.
-   int z;  // Deletion.
-
-   int a1[257] = {0};
-   int a2[257] = {0};
-
-   int * LCURR = a1 + 128;
-   int * LPREV = a2 + 128;
-
-   for (int i = 0 ; i < len1 ; i++) {
-      if (i > sz) {
-         x = LPREV[-sz] + (seq1[i] != seq2[i-sz]);
-         y = LPREV[-sz+1] + 1;
-         LCURR[-sz] = x < y ? x : y;
-         x = LPREV[sz] + (seq1[i-sz] != seq2[i]);
-         z = LPREV[sz-1] + 1;
-         LCURR[-sz] = x < z ? x : z;
-      }
-      for (int j = -sz+1; j < 0 ; j++) {
-         if (i+j < 0) continue;
-         x = LPREV[j] + (seq1[i] != seq2[i+j]);
-         y = LPREV[j+1] + 1;
-         z = LCURR[j-1] + 1;
-         LCURR[j] = x < y ? (x < z ? x : z) : (y < z ? y : z);
-      }
-      for (int j = sz-1 ; j > 0 ; j--) {
-         if (i-j < 0) continue;
-         x = LPREV[j] + (seq1[i-j] != seq2[i]);
-         y = LPREV[j-1] + 1;
-         z = LCURR[j+1] + 1;
-         LCURR[j] = x < y ? (x < z ? x : z) : (y < z ? y : z);
-      }
-      x = LPREV[0] + (seq1[i] != seq2[i]);
-      y = LCURR[-1] + 1;
-      z = LCURR[1] + 1;
-      LCURR[0] = x < y ? (x < z ? x : z) : (y < z ? y : z);
-
-      if (LCURR[0] > cutoff) return cutoff + 1 ;
-
-      int * tmp = LPREV;
-      LPREV = LCURR;
-      LCURR = tmp;
-
-   }
-
-   return LCURR[0];
-
-}
-
-
 void
 recursive_mem_chain
 (
@@ -562,7 +498,7 @@ mapread
 {
    int len = strlen(seq);
 
-   // TODO: the assert is super weak.
+   // FIXME: the assert is super weak.
    assert(len <= LEN);
 
    int end = len-1;
@@ -580,9 +516,7 @@ mapread
 
    while (1) {
 
-      // Grab a new struct of type 'mem_t'.
       mem_t mem = {0};
-
       mem.end = end;
 
       // Backward <<<
@@ -591,75 +525,40 @@ mapread
 
       // Look up the beginning (reverse) of the query in lookup table.
       if (end >= LUTK - 1) {
-	 size_t merid = 0;
-	 for ( ; mlen < LUTK ; mlen++, mpos--) {
-	    uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
-	    merid = c + (merid << 2);
-	 }
-	 range = idx.lut->kmer[merid];
-	 mem.left[LUTK-1] = range.top - range.bot + 1;
+         size_t merid = 0;
+         for ( ; mlen < LUTK ; mlen++, mpos--) {
+            uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
+            merid = c + (merid << 2);
+         }
+         range = idx.lut->kmer[merid];
       }
 
       // Cancel if we went too far already.
       if (range.top < range.bot) {
-	 range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-	 mpos = end; mlen = 0;
+         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+         mpos = end; mlen = 0;
       }
 
       for ( ; mpos >= 0 ; mpos--, mlen++) {
-	 if (NONALPHABET[(uint8_t)seq[mpos]]) break;
-	 int c = ENCODE[(uint8_t) seq[mpos]];
-	 newrange.bot = get_rank(idx.occ, c, range.bot - 1);
-	 newrange.top = get_rank(idx.occ, c, range.top) - 1;
-	 // Collect (reverse) cascade data.
-	 mem.left[mlen] = newrange.top - newrange.bot + 1;
-	 // Stop if no hits.
-	 if (newrange.top < newrange.bot)
-	    break;
-	 range = newrange;
+         if (NONALPHABET[(uint8_t)seq[mpos]]) break;
+         int c = ENCODE[(uint8_t) seq[mpos]];
+         newrange.bot = get_rank(idx.occ, c, range.bot - 1);
+         newrange.top = get_rank(idx.occ, c, range.top) - 1;
+         // Stop if no hits.
+         if (newrange.top < newrange.bot)
+            break;
+         range = newrange;
       }
 
       mem.beg = ++mpos;
       mem.range = range;
 
-      // Forward >>>
-      range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-      mlen = 0;
-
-      if (end + 1 >= LUTK && end - mpos + 1 >= LUTK) {
-	 size_t merid = 0;
-	 for ( ; mlen < LUTK ; mpos++, mlen++) {
-	    uint8_t c = REVCMP[(uint8_t) seq[mpos]];
-	    merid = c + (merid << 2);
-	 }
-	 range = idx.lut->kmer[merid];
-	 mem.right[LUTK-1] = range.top - range.bot + 1;
-      }
-
-      // Cancel if we went too far already.
-      if (range.top < range.bot) {
-	 range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-	 mpos = mem.beg; mlen = 0;
-      }
-
-      for ( ; mpos <= end ; mpos++, mlen++) {
-	 if (NONALPHABET[(uint8_t) seq[mpos]]) break;
-	 int c = REVCMP[(uint8_t) seq[mpos]];
-	 range.bot = get_rank(idx.occ, c, range.bot - 1);
-	 range.top = get_rank(idx.occ, c, range.top) - 1;
-	 // Collect (forward) cascade data.
-	 mem.right[mlen] = range.top - range.bot + 1;
-	 // Stop if less than bw_hits.
-	 if (range.top < range.bot)
-	    break;
-      }
-
       // Keep MEM if above minimum size.
       if (mlen >= gamma) {
-	 mem_t * m = malloc(sizeof(mem_t));
-	 exit_on_memory_error(m);
-	 memcpy(m, &mem, sizeof(mem_t));
-	 push(m, &mems);
+         mem_t * m = malloc(sizeof(mem_t));
+         exit_on_memory_error(m);
+         memcpy(m, &mem, sizeof(mem_t));
+         push(m, &mems);
       }
 
       if (mem.beg < 1) break;
@@ -667,22 +566,23 @@ mapread
       // Find new end position (forward).
       end = mem.beg - 1;
       if (NONALPHABET[(uint8_t) seq[end]]) {
-	 while (end > 0 && NONALPHABET[(uint8_t) seq[end]]) end--;
+         while (end > 0 && NONALPHABET[(uint8_t) seq[end]]) end--;
       } else {
-	 range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-	 while (1) {
-	    int c = REVCMP[(uint8_t) seq[end]];
-	    range.bot = get_rank(idx.occ, c, range.bot - 1);
-	    range.top = get_rank(idx.occ, c, range.top) - 1;
-	    if (range.top < range.bot) {
-	       end--;
-	       break;
-	    }
-	    end++;
-	 }
+         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+         while (1) {
+            int c = REVCMP[(uint8_t) seq[end]];
+            range.bot = get_rank(idx.occ, c, range.bot - 1);
+            range.top = get_rank(idx.occ, c, range.top) - 1;
+            if (range.top < range.bot) {
+               end--;
+               break;
+            }
+            end++;
+         }
       }
-      
-      if (end + 1 < gamma) break;
+
+      if (end + 1 < gamma) break; // No more seeds.
+
    }
 
    // Return the best alignment(s) in an alignment stack.

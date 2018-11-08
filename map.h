@@ -22,9 +22,6 @@ struct mem_t {
    range_t   range;
    size_t  * sa;
    int       aligned;
-   // Decay cascades.
-   size_t    left[50];
-   size_t    right[50];
 };
 
 struct aln_t {

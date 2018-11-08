@@ -221,6 +221,7 @@ analyze_mem
 )
 {
 
+   /*
    const int n = GAMMA;
    const double MU[6] = {.01, .02, .05, .10, .15, .25};
 
@@ -269,6 +270,8 @@ analyze_mem
    }
 
    return mem_false_pos(50, best_mu, best_N0);
+   */
+   return 0.0;
 
 }
 
