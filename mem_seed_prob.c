@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 
 // SECTION 1. MACROS //
@@ -11,7 +12,7 @@
 #define SUCCESS 1
 #define FAILURE 0
 
-// Number of entries in the global hash 'HTAB'.
+// Number of entries in the global hashes.
 #define HSIZE 4096
 
 // Check if a polynomial is null.
@@ -80,12 +81,11 @@
 
 typedef struct matrix_t     matrix_t;      // Transfer matrices.
 typedef struct rec_t        rec_t;         // Hash table records.
-typedef struct sq_t         sq_t;          // Squished N values.
 typedef struct trunc_pol_t  trunc_pol_t;   // Truncated polynomials.
 
 struct rec_t {
-	size_t   lgN;         // Number of duplicates (log2).
 	double   u;           // Divergence rate.
+	size_t   N;           // Number of duplicates (log2).
 	double * prob;        // False positive probabilities.
    rec_t  * next;        // Next record if any.
 };
@@ -93,11 +93,6 @@ struct rec_t {
 struct matrix_t {
    const size_t    dim;  // Column / row number.
    trunc_pol_t * term[]; // Terms of the matrix.
-};
-
-struct sq_t {
-   size_t lg;            // Log value (entry in the hash).
-   size_t nrm;           // Normalized value of N (see note 4.4.3.1).
 };
 
 struct trunc_pol_t {
@@ -143,7 +138,8 @@ static double  P = 0.0;     // Probability of a read error.
 
 static size_t  KSZ = 0;     // Memory size of the 'trunc_pol_t' struct.
 
-static rec_t * HTAB[HSIZE] = {0};  // Hash table of probabilities.
+static rec_t * MEMF[HSIZE] = {0};  // Probabilities of MEM failure.
+static rec_t * TYPI[HSIZE] = {0};  // Probabilities of type I failure.
 
 static trunc_pol_t * TEMP = NULL;  // For matrix multipliciation.
 
@@ -305,18 +301,20 @@ destroy_mat
 
 void
 destroy_hash
-(void)
+(
+   rec_t ** hash
+)
 // SYNOPSIS:
-//   Free the memory for all entries of the golbal hash 'HTAB'.
+//   Free the memory for all entries of the hash.
 {
    for (int i = 0 ; i < HSIZE ; i++) {
-      for (rec_t *rec = HTAB[i] ; rec != NULL ; ) {
+      for (rec_t *rec = hash[i] ; rec != NULL ; ) {
          rec_t *next = rec->next;
          free(rec->prob);
          free(rec);
          rec = next;
       }    
-      HTAB[i] = NULL;
+      hash[i] = NULL;
    }
 }
 
@@ -436,11 +434,17 @@ in_case_of_failure:
 
 // SECTION 4.4.3 HASH MANIPULATION FUNCTIONS //
 
-sq_t
+size_t
 squish
 (
    size_t N
 )
+// SYNOPSIS:
+//   Assign 'N' to predefined buckets.
+//
+// RETURN:
+//   The reference value for 'N'.
+{
 
    // NOTE 4.4.3.1. Shared buckets for the values of N.
    //
@@ -448,35 +452,43 @@ squish
    // 255, 511, 1023, 2047, 4095, 8191, 16383. In other words, 0 has its
    // own bucket, 1 and 2 have the same bucket, so do 3, 4, 5, 6 etc.
    // The normalized values of 'N' are the mid-points of the intervals.
-{
+
    const size_t normalized_values[] =
       {0,1,4,10,22,46,94,190,382,766,1534,3070,6142,12286,24574};
+
    size_t lgN = N < 16383 ? floor(log2(N+1)) : 14;
-   return (sq_t) { lgN, normalized_values[lgN] };
+   return normalized_values[lgN];
+
 }
 
 
 rec_t *
 lookup
 (
-    const size_t lgN,
-    const double u
+          rec_t  ** hash,
+    const double    u,
+    const size_t    N
 )
 // SYNOPSIS:
-//   Look for the entry of the global hash 'HTAB' associated with the key
-//   (N,u). Both 'N' and 'u' are "coarse-grained" in the sense that
-//   'N' is log-transformed (see below) and 'u' varies by 0.1 increments
-//   (i.e. it can have only 11 possible values, only 9 of which are
-//   conform).
+//   Look for the entry of the hash associated with the key (N,u).
+//   Both 'N' and 'u' are "coarse-grained" (see function 'squish()'
+//   and note 4.4.3.2).
 //
 // RETURN:
 //   A pointer to the struct of type 'rec_t' that corresponds to the key
 //   (or its coarse-grained variants) if present, or NULL otherwise.
 {
+
+   // NOTE 4.4.3.2. Granularity of 'N' and 'u'.
+   //
+   // The granularity of 'N' values is defined by the 'squish()'
+   // function. The vaules of 'u' are allowed to vary by 0.01.
    
-   size_t addr = (size_t) (30*lgN + 10*u) % HSIZE;
-   for (rec_t *rec = HTAB[addr] ; rec != NULL ; rec = rec->next) {
-      if (rec->lgN == lgN && rec->u == u) return rec;
+   size_t coarse_u = (100 * u);
+   size_t addr = (37*N + coarse_u) % HSIZE;
+   
+   for (rec_t *rec = hash[addr] ; rec != NULL ; rec = rec->next) {
+      if (rec->u == coarse_u && rec->N == N) return rec;
    }
 
    // Entry not found.
@@ -488,16 +500,15 @@ lookup
 rec_t *
 insert
 (
-    const size_t   lgN,
-    const double   u,
-          double * prob
+          rec_t  ** hash,
+    const double    u,
+    const size_t    N,
+          double *  prob
 )
 // SYNOPSIS:
-//   Create an entry in the global hash 'HTAB' associated with the key
+//   Create an entry in the hash associated with the key
 //   (N,u), and associate it with the array 'prob'. Both 'N' and 'u' are
-//   "coarse-grained" in the sense that 'N' is log-transformed (see
-//   below) and 'u' varies by 0.1 increments (i.e. it can have only 11
-//   possible values, only 9 of which are conform).
+//   "coarse-grained" (see function 'squish()' and note 4.4.3.2).
 //
 // RETURN:
 //   A pointer to the struct of type 'rec_t' that corresponds to the
@@ -507,17 +518,19 @@ insert
 //   Fails if 'malloc()' fails.
 {
 
-   size_t addr = (size_t) (30*lgN + 10*u) % HSIZE;
+   // See note 4.4.3.2.
+   size_t coarse_u = (100 * u);
+   size_t addr = (37*N + coarse_u) % HSIZE;
 
    rec_t *new = malloc(sizeof(rec_t));
    handle_memory_error(new);
 
-   new->lgN = lgN;
-   new->u = u;
+   new->u = coarse_u;
+   new->N = N;
    new->prob = prob;
-   new->next = HTAB[addr];
+   new->next = hash[addr];
 
-   HTAB[addr] = new;
+   hash[addr] = new;
 
    return new;
 
@@ -600,7 +613,8 @@ clean_mem_prob // VISIBLE //
    free(ETAc);  ETAc = NULL;
 
    // Clean hash table.
-   destroy_hash();
+   destroy_hash(MEMF);
+   destroy_hash(TYPI);
    
    return;
 
@@ -649,7 +663,8 @@ set_params_mem_prob // VISIBLE //
    PARAMS_INITIALIZED = 1;
 
    // Clean previous values (if any).
-   destroy_hash();
+   destroy_hash(MEMF);
+   destroy_hash(TYPI);
 
    free(TEMP); // Nothing happens if 'TEMP' is NULL.
    handle_memory_error(TEMP = new_zero_trunc_pol());
@@ -1825,16 +1840,14 @@ in_case_of_failure:
 // SECTION 4.12. HIGH-LEVEL LIBRARY FUNCTIONS //
 
 double
-mem_false_pos            // VISIBLE //
+prob_MEM_failure         // VISIBLE //
 (
    const size_t k,       // Segment or read size.
    const double u,       // Divergence rate.
    const size_t N        // Number of duplicates.
 )
 // SYNOPSIS:
-//   Compute the probability that the MEM seeding process generates a
-//   false positive for specified static and dynamic parameters. The
-//   results are memoized in the global hash 'HTAB' for future calls.
+//   Compute the probability that there is no on target MEM seed.
 //
 // RETURN:
 //   A double-precision number with the probability of interest, or 'nan'
@@ -1842,35 +1855,97 @@ mem_false_pos            // VISIBLE //
 //
 // FAILURE:
 //   Fails if static parameters are unininitialized, if dynamic
-//   parameters are not conform, if insertion in 'HTAB' fails or if
+//   parameters are not conform, if insertion in 'MEMF' fails or if
 //   'malloc()' fails.
 {
 
-   trunc_pol_t *P1 = NULL;
-   trunc_pol_t *P2 = NULL;
-   trunc_pol_t *P3 = NULL;
+   trunc_pol_t *pol = NULL;
    
    // Check dynamic parameters.
    if (!dynamic_params_OK(k,u,N)) {
       goto in_case_of_failure;
    }
 
-   sq_t sqN = squish(N);
-   rec_t *rec = lookup(sqN.lg, u);
+   size_t sqN = squish(N);
+   rec_t *rec = lookup(MEMF, u, sqN);
 
-   // Need to compute the probability.
+   // Need to compute the probability?
    if (rec == NULL) {
 
       // Choose method. If 'N' > 20 and 'P' < 0.05 use MCMC.
       int use_method_wgf = METH == METHOD_WGF ||
-                  (METH == METHOD_AUTO && sqN.nrm < 21 && P < .05);
+                  (METH == METHOD_AUTO && sqN < 21 && P < .05);
       
-      P1 = compute_exact_seed_prob();  // Prob no exact gamma-seed.
-      P2 = compute_dual_prob_wgf(u);   // Prob no hit (two seq model).
-      P3 = use_method_wgf ?            // Prob no on target MEM seed.
-               compute_mem_prob_wgf(u,sqN.nrm):
-               compute_mem_prob_mcmc(u,sqN.nrm);
-      if (P1 == NULL || P2 == NULL || P3 == NULL)
+      pol = use_method_wgf ?           // Prob no on target MEM seed.
+               compute_mem_prob_wgf(u, sqN):
+               compute_mem_prob_mcmc(u, sqN);
+
+      if (pol == NULL)
+         goto in_case_of_failure;
+
+      double *prob = malloc((K+1) * sizeof(double));
+      handle_memory_error(prob);
+
+      memcpy(prob, pol->coeff, (K+1) * sizeof(double));
+
+      free(pol);
+
+      // Insert in the global hash 'MEMF'.
+      rec = insert(MEMF, u, sqN, prob);
+      if (rec == NULL) {
+         free(prob);
+         goto in_case_of_failure;
+      }
+
+   }
+
+   return rec->prob[k];
+
+in_case_of_failure:
+   free(pol);
+   return 0.0/0.0;  //  nan
+
+}
+
+
+double
+prob_typeI_MEM_failure   // VISIBLE //
+(
+   const size_t k,       // Segment or read size.
+   const double u,       // Divergence rate.
+   const size_t N        // Number of duplicates.
+)
+// SYNOPSIS:
+//   Compute the probability that there is no on-target or on-duplicate
+//   MEM seed (i.e. there is no seed in the combinatorial problem).
+//
+// RETURN:
+//   A double-precision number with the probability of interest, or 'nan'
+//   in case of failure.
+//
+// FAILURE:
+//   Fails if static parameters are unininitialized, if dynamic
+//   parameters are not conform, if insertion in 'TYPI' fails or if
+//   'malloc()' fails.
+{
+
+   trunc_pol_t *pol1 = NULL;
+   trunc_pol_t *pol2 = NULL;
+   
+   // Check dynamic parameters.
+   if (!dynamic_params_OK(k,u,N)) {
+      goto in_case_of_failure;
+   }
+
+   size_t sqN = squish(N);
+   rec_t *rec = lookup(TYPI, u, sqN);
+
+   // Need to compute the probability.
+   if (rec == NULL) {
+
+      pol1 = compute_exact_seed_prob();  // Prob no exact gamma-seed.
+      pol2 = compute_dual_prob_wgf(u);   // Prob no hit (two seq model).
+      if (pol1 == NULL || pol2 == NULL)
          goto in_case_of_failure;
 
       double *prob = malloc((K+1) * sizeof(double));
@@ -1883,17 +1958,15 @@ mem_false_pos            // VISIBLE //
       // that there is no on-target exact seed, multiplied by the
       // probability that there is no on-target exact seed.
       for (int i = 0 ; i <= K ; i++) {
-         double P0 = P1->coeff[i] *
-            pow(P2->coeff[i] / P1->coeff[i], sqN.nrm);
-         prob[i] = (P3->coeff[i] - P0) / (1-P0);
+         prob[i] = pol1->coeff[i] *
+            pow(pol2->coeff[i] / pol1->coeff[i], sqN);
       }
 
-      free(P1);
-      free(P2);
-      free(P3);
+      free(pol1);
+      free(pol2);
 
-      // Insert in the global hash 'HTAB'.
-      rec = insert(sqN.lg, u, prob);
+      // Insert in the global hash 'TYPI'.
+      rec = insert(TYPI, u, sqN, prob);
       if (rec == NULL) {
          free(prob);
          goto in_case_of_failure;
@@ -1904,14 +1977,37 @@ mem_false_pos            // VISIBLE //
    return rec->prob[k];
 
 in_case_of_failure:
-   free(P1);
-   free(P2);
-   free(P3);
+   free(pol1);
+   free(pol2);
    return 0.0/0.0;  //  nan
 
 }
 
 
+double
+prob_typeII_MEM_failure   // VISIBLE //
+(
+   const size_t k,       // Segment or read size.
+   const double u,       // Divergence rate.
+   const size_t N        // Number of duplicates.
+)
+// SYNOPSIS:
+//   Compute the probability that there is an on-duplicate MEM seed.
+//
+// RETURN:
+//   A double-precision number with the probability of interest, or 'nan'
+//   in case of failure.
+//
+// FAILURE:
+//   Fails if 'prob_MEM_failure()' fails or if
+//   'prob_typeII_MEM_failure()' fails.
+{
+
+   // Note that the two functions below have many side effects.
+   return prob_MEM_failure(k, u, N) -
+          prob_typeI_MEM_failure(k, u, N);
+
+}
 
 #if 0
 double

@@ -53,6 +53,8 @@
          __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
 
 
+double TYPEI = -1.0;
+
 void
 build_index
 (
@@ -215,32 +217,74 @@ load_index
 
 
 double
-analyze_mem
+quality
 (
-   mem_t mem
+   aln_t   aln,
+   index_t idx
 )
 {
 
-   /*
+   size_t l_cascade[50] = {0};
+   size_t r_cascade[50] = {0};
+
+   size_t merid;
+   int mlen;
+
+   // Bacwkard search on the hit.
+   range_t range;
+
+   // Look up the beginning (reverse) of the query in lookup table.
+   merid = 0;
+   for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      uint8_t c = ENCODE[(uint8_t) aln.refseq[49-mlen]];
+      merid = c + (merid << 2);
+   }
+   range = idx.lut->kmer[merid];
+
+   for ( ; mlen < 50 ; mlen++) {
+      if (NONALPHABET[(uint8_t) aln.refseq[49-mlen]])
+         return 0.0/0.0;
+      int c = ENCODE[(uint8_t) aln.refseq[49-mlen]];
+      range.bot = get_rank(idx.occ, c, range.bot - 1);
+      range.top = get_rank(idx.occ, c, range.top) - 1;
+      l_cascade[mlen] = range.top - range.bot + 1;
+   }
+
+   // Look up the beginning (forward) of the query in lookup table.
+   merid = 0;
+   for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      uint8_t c = REVCMP[(uint8_t) aln.refseq[mlen]];
+      merid = c + (merid << 2);
+   }
+   range = idx.lut->kmer[merid];
+
+   for ( ; mlen < 50 ; mlen++) {
+      if (NONALPHABET[(uint8_t) aln.refseq[49-mlen]])
+         return 0.0/0.0;
+      int c = REVCMP[(uint8_t) aln.refseq[mlen]];
+      range.bot = get_rank(idx.occ, c, range.bot - 1);
+      range.top = get_rank(idx.occ, c, range.top) - 1;
+      r_cascade[mlen] = range.top - range.bot + 1;
+   }
+
    const int n = GAMMA;
-   const double MU[6] = {.01, .02, .05, .10, .15, .25};
+   const double MU[3] = {.02, .04, .06};
 
-   const double L1 = mem.left[n] - 1;
-   const double R1 = mem.right[n] - 1;
-         double L2 = (n+1) * (mem.left[n] - 1);
-         double R2 = (n+1) * (mem.right[n] - 1);
+   const double L1 = l_cascade[n] - 1;
+   const double R1 = r_cascade[n] - 1;
+         double L2 = (n+1) * (l_cascade[n] - 1);
+         double R2 = (n+1) * (r_cascade[n] - 1);
 
-   // FIXME: put a sentinel in 'mem.left'.
-   for (int i = GAMMA+1 ; mem.left[i] > 0 ; i++) {
-      L2 += mem.left[i] - 1;
-      R2 += mem.right[i] - 1;
+   for (int i = GAMMA+1 ; l_cascade[i] > 0 ; i++) {
+      L2 += l_cascade[i] - 1;
+      R2 += r_cascade[i] - 1;
    }
 
    double loglik = -INFINITY;
    size_t best_N0 = 0.0;
    double best_mu = 0.0;
 
-   for (int iter = 0 ; iter < 6 ; iter++) {
+   for (int iter = 0 ; iter < 3 ; iter++) {
 
       double mu = MU[iter];
 
@@ -269,9 +313,10 @@ analyze_mem
 
    }
 
-   return mem_false_pos(50, best_mu, best_N0);
-   */
-   return 0.0;
+   double typeI = prob_typeI_MEM_failure(50, best_mu, best_N0);
+   double typeII = prob_typeII_MEM_failure(50, best_mu, best_N0);
+
+   return typeI + typeII;
 
 }
 
@@ -307,20 +352,31 @@ batchmap
    exit_error(seq == NULL);
 
    // Read sequence file line by line.
+   size_t counter = 0;
    while ((rlen = getline(&seq, &sz, inputf)) != -1) {
+      
+      // Remove newline character if present.
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
 
-      alnstack_t * aln = mapread(seq, idx, genome, GAMMA);
+      alnstack_t * alnstack = mapread(seq, idx, genome, GAMMA);
 
-      if (!aln) exit(EXIT_FAILURE);
-      // Take the first alignment and hope it is random.
-      aln_t a = aln->aln[0];
-      char * apos = chr_string(a.refpos, idx.chr);
-      double prob = aln->pos > 1 ? .5 : analyze_mem(a.mem);
-      fprintf(stderr, "%s\t%s\t%f\n", seq, apos, prob);
+      if (!alnstack) exit(EXIT_FAILURE);
+
+      // Take one of the best alignments at "random".
+      if (alnstack->pos == 0) {
+         fprintf(stdout, "**** NO ALIGNMENT ****\n");
+         free(alnstack);
+         continue;
+      }
+      aln_t aln = alnstack->aln[counter++ % alnstack->pos];
+
+      char * apos = chr_string(aln.refpos, idx.chr);
+      double prob = alnstack->pos > 1 ? .5 : quality(aln, idx);
+      fprintf(stdout, "%s\t%s\t%f\n", seq, apos, prob);
+
       free(apos);
+      free(alnstack);
 
-      free(aln);
    }
 
    free(seq);
