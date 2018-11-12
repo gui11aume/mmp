@@ -267,17 +267,26 @@ quality
       r_cascade[mlen] = range.top - range.bot + 1;
    }
 
-   const int n = GAMMA;
-   const double MU[3] = {.02, .04, .06};
+   // Here we need to pay attention to the fact that C is
+   // 0-based, which creates some confusion for the value
+   // of 'n'. For clarity, we say that 'n' is the first
+   // number in the 1-based convension, and we shift it
+   // by 1 when accessing C arrays.
+   
+   // FIXME: another weak assert.
+   assert (GAMMA + 3 < 50);
 
-   const double L1 = l_cascade[n] - 1;
-   const double R1 = r_cascade[n] - 1;
-         double L2 = (n+1) * (l_cascade[n] - 1);
-         double R2 = (n+1) * (r_cascade[n] - 1);
+   const int n = GAMMA + 4; // Skip the first GAMMA + 3.
+   const double MU[3] = {.06, .04, .02};
 
-   for (int i = GAMMA+1 ; l_cascade[i] > 0 ; i++) {
-      L2 += l_cascade[i] - 1;
-      R2 += r_cascade[i] - 1;
+   const double L1 = l_cascade[n-1] - 1;
+   const double R1 = r_cascade[n-1] - 1;
+         double L2 = n * (l_cascade[n-1] - 1);
+         double R2 = n * (r_cascade[n-1] - 1);
+
+   for (int i = n+1 ; i < 50+1 ; i++) {
+      L2 += l_cascade[i-1] - 1;
+      R2 += r_cascade[i-1] - 1;
    }
 
    double loglik = -INFINITY;
@@ -313,10 +322,23 @@ quality
 
    }
 
-   double typeI = prob_typeI_MEM_failure(50, best_mu, best_N0);
+   double typeI = prob_typeI_MEM_failure(50, best_mu, best_N0) / 5;
    double typeII = prob_typeII_MEM_failure(50, best_mu, best_N0);
 
-   return typeI + typeII;
+   if (best_N0 == 1 && best_mu == 0.06)
+      typeII /= 5;
+
+   // Binomial terms (type I).
+   double A = lgamma(51) - lgamma(51-aln.score) - lgamma(aln.score+1) +
+      aln.score * log(0.01) + (50-aln.score) * log(0.99);
+   double B = lgamma(51-GAMMA) - lgamma(51-GAMMA-aln.score) -
+      lgamma(aln.score+1) + aln.score * log(0.75) +
+      (50-GAMMA-aln.score) * log(0.25);
+   double prob_typeI_given_data =
+      1.0 / ( 1.0 + exp(A + log(1-typeI) - B - log(typeI)) );
+
+   return prob_typeI_given_data + typeII >= 1.0 ? 1.0 :
+      prob_typeI_given_data + typeII;
 
 }
 
@@ -364,14 +386,17 @@ batchmap
 
       // Take one of the best alignments at "random".
       if (alnstack->pos == 0) {
-         fprintf(stdout, "**** NO ALIGNMENT ****\n");
+         fprintf(stdout, "%s\tNA\tNA\n", seq);
          free(alnstack);
          continue;
       }
+
       aln_t aln = alnstack->aln[counter++ % alnstack->pos];
 
       char * apos = chr_string(aln.refpos, idx.chr);
-      double prob = alnstack->pos > 1 ? .5 : quality(aln, idx);
+      double prob = alnstack->pos > 1 ?
+         1.0 - 1.0 / alnstack->pos :
+         quality(aln, idx);
       fprintf(stdout, "%s\t%s\t%f\n", seq, apos, prob);
 
       free(apos);
