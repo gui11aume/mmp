@@ -186,15 +186,20 @@ nonoverlapping_mems
 {
    // Alloc.
    stack_t * chain_stack = stack_new(8);
-   mem_t  ** chain = malloc(mems->pos*sizeof(mem_t *));
-   exit_on_memory_error(chain);
 
-   // 1. Sort MEMs by start position.
-   qsort(mems->ptr, mems->pos, sizeof(mem_t *), mem_by_start);
+   if (mems->pos > 0) {
+      mem_t  ** chain = malloc(mems->pos*sizeof(mem_t *));
+      exit_on_memory_error(chain);
 
-   // 2. Recursive call to mem group.
-   recursive_mem_chain(mems, 0, 0, chain, &chain_stack);
-   free(chain);
+      // 1. Sort MEMs by start position.
+      qsort(mems->ptr, mems->pos, sizeof(mem_t *), mem_by_start);
+
+      // 2. Recursive call to mem group.
+      recursive_mem_chain(mems, 0, 0, chain, &chain_stack);
+
+      free(chain);
+   }
+
    // 3. Return stack of non-overlapping MEM combinations.
    return chain_stack;
 }
