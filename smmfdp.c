@@ -219,13 +219,17 @@ load_index
 double
 quality
 (
-   aln_t   aln,
-   index_t idx
+         aln_t   aln,
+   const char * seq,
+         index_t idx
 )
 {
 
-   size_t l_cascade[50] = {0};
-   size_t r_cascade[50] = {0};
+   size_t slen = strlen(seq);
+
+   assert(slen < 250);
+   size_t l_cascade[250] = {0};
+   size_t r_cascade[250] = {0};
 
    size_t merid;
    int mlen;
@@ -236,15 +240,15 @@ quality
    // Look up the beginning (reverse) of the query in lookup table.
    merid = 0;
    for (mlen = 0 ; mlen < LUTK ; mlen++) {
-      uint8_t c = ENCODE[(uint8_t) aln.refseq[49-mlen]];
+      uint8_t c = ENCODE[(uint8_t) aln.refseq[slen-1-mlen]];
       merid = c + (merid << 2);
    }
    range = idx.lut->kmer[merid];
 
-   for ( ; mlen < 50 ; mlen++) {
-      if (NONALPHABET[(uint8_t) aln.refseq[49-mlen]])
+   for ( ; mlen < slen ; mlen++) {
+      if (NONALPHABET[(uint8_t) aln.refseq[slen-mlen-1]])
          return 0.0/0.0;
-      int c = ENCODE[(uint8_t) aln.refseq[49-mlen]];
+      int c = ENCODE[(uint8_t) aln.refseq[slen-mlen-1]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
       range.top = get_rank(idx.occ, c, range.top) - 1;
       l_cascade[mlen] = range.top - range.bot + 1;
@@ -258,8 +262,8 @@ quality
    }
    range = idx.lut->kmer[merid];
 
-   for ( ; mlen < 50 ; mlen++) {
-      if (NONALPHABET[(uint8_t) aln.refseq[49-mlen]])
+   for ( ; mlen < slen ; mlen++) {
+      if (NONALPHABET[(uint8_t) aln.refseq[slen-mlen-1]])
          return 0.0/0.0;
       int c = REVCMP[(uint8_t) aln.refseq[mlen]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
@@ -274,7 +278,7 @@ quality
    // by 1 when accessing C arrays.
    
    // FIXME: another weak assert.
-   assert (GAMMA + 3 < 50);
+   assert (GAMMA + 3 < slen);
 
    const int n = GAMMA + 4; // Skip the first GAMMA + 3.
    const double MU[3] = {.06, .04, .02};
@@ -284,7 +288,7 @@ quality
          double L2 = n * (l_cascade[n-1] - 1);
          double R2 = n * (r_cascade[n-1] - 1);
 
-   for (int i = n+1 ; i < 50+1 ; i++) {
+   for (int i = n+1 ; i < slen+1 ; i++) {
       L2 += l_cascade[i-1] - 1;
       R2 += r_cascade[i-1] - 1;
    }
@@ -322,18 +326,19 @@ quality
 
    }
 
-   double typeI = prob_typeI_MEM_failure(50, best_mu, best_N0) / 5;
-   double typeII = prob_typeII_MEM_failure(50, best_mu, best_N0);
+   double typeI = prob_typeI_MEM_failure(slen, best_mu, best_N0) / 5;
+   double typeII = prob_typeII_MEM_failure(slen, best_mu, best_N0);
 
    if (best_N0 == 1 && best_mu == 0.06)
       typeII /= 5;
 
    // Binomial terms (type I).
-   double A = lgamma(51) - lgamma(51-aln.score) - lgamma(aln.score+1) +
-      aln.score * log(0.01) + (50-aln.score) * log(0.99);
-   double B = lgamma(51-GAMMA) - lgamma(51-GAMMA-aln.score) -
+   double A = lgamma(slen+1) - lgamma(slen-aln.score+1) -
+      lgamma(aln.score+1) + aln.score * log(0.01) +
+      (slen-aln.score) * log(0.99);
+   double B = lgamma(slen-GAMMA+1) - lgamma(slen-GAMMA-aln.score+1) -
       lgamma(aln.score+1) + aln.score * log(0.75) +
-      (50-GAMMA-aln.score) * log(0.25);
+      (slen-GAMMA-aln.score) * log(0.25);
    double prob_typeI_given_data =
       1.0 / ( 1.0 + exp(A + log(1-typeI) - B - log(typeI)) );
 
@@ -365,20 +370,26 @@ batchmap
    FILE * inputf = fopen(readsfname, "r");
    if (inputf == NULL) exit_cannot_open(readsfname);
 
-   // Initialize MEM seed probablities.
-   set_params_mem_prob(GAMMA, 50, .01);
 
    size_t sz = 64;
    ssize_t rlen;
    char * seq = malloc(64);
    exit_error(seq == NULL);
 
+   size_t counter = 0; // Used for randomizing.
+   size_t maxlen = 0; // Max 'k' value for seeding probabilities.
+
    // Read sequence file line by line.
-   size_t counter = 0;
    while ((rlen = getline(&seq, &sz, inputf)) != -1) {
       
       // Remove newline character if present.
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
+
+      if (rlen > maxlen) {
+         maxlen = rlen;
+         // Initialize library with read length.
+         set_params_mem_prob(GAMMA, rlen, .01);
+      }
 
       alnstack_t * alnstack = mapread(seq, idx, genome, GAMMA);
 
@@ -395,8 +406,8 @@ batchmap
 
       char * apos = chr_string(aln.refpos, idx.chr);
       double prob = alnstack->pos > 1 ?
-         1.0 - 1.0 / alnstack->pos :
-         quality(aln, idx);
+                        1.0 - 1.0 / alnstack->pos :
+                        quality(aln, seq, idx);
       fprintf(stdout, "%s\t%s\t%f\n", seq, apos, prob);
 
       free(apos);
