@@ -503,9 +503,6 @@ mapread
 {
    int len = strlen(seq);
 
-   // FIXME: the assert is super weak.
-   assert(len <= LEN);
-
    int end = len-1;
    while (end > 0 && NONALPHABET[(uint8_t)seq[end]]) end--;
    
@@ -517,7 +514,7 @@ mapread
    range_t newrange = {0};
 
    // Number of MEM seeds.
-   stack_t * mems = stack_new(50);
+   stack_t * mems = stack_new(len);
 
    while (1) {
 
@@ -532,6 +529,11 @@ mapread
       if (end >= LUTK - 1) {
          size_t merid = 0;
          for ( ; mlen < LUTK ; mlen++, mpos--) {
+	    if (NONALPHABET[(uint8_t) seq[end-mlen]]) {
+	       range.bot = 1;
+	       range.top = 0;
+	       break;
+	    }
             uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
             merid = c + (merid << 2);
          }
