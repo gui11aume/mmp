@@ -3,7 +3,6 @@
 typedef struct memchain_t memchain_t;
 typedef struct seed_t     seed_t;
 
-#define LEN 50
 #define MEM_MAX_LOCI 1000
 #define MAX_MINSCORE_REPEATS 2
 
@@ -501,10 +500,8 @@ mapread
  const size_t    gamma
  )
 {
-   int len = strlen(seq);
 
-   // FIXME: the assert is super weak.
-   assert(len <= LEN);
+   int len = strlen(seq);
 
    int end = len-1;
    while (end > 0 && NONALPHABET[(uint8_t)seq[end]]) end--;

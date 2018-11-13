@@ -53,7 +53,12 @@
          __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
 
 
-double TYPEI = -1.0;
+typedef struct uN0_t uN0_t;
+struct uN0_t {
+   double u;
+   size_t N0;
+};
+
 
 void
 build_index
@@ -216,6 +221,78 @@ load_index
 }
 
 
+uN0_t
+estimate_uN0
+(
+   const size_t * l_cascade,
+   const size_t * r_cascade,
+   const size_t   slen
+)
+{
+
+   // Here we need to pay attention to the fact that C is
+   // 0-based, which creates some confusion for the value
+   // of 'n'. For clarity, we say that 'n' is the first
+   // number in the 1-based convension, and we shift it
+   // by 1 when accessing C arrays.
+   
+   // FIXME: another weak assert.
+   assert (GAMMA + 3 < slen);
+
+   const int n = GAMMA + 4; // Skip the first GAMMA + 3.
+   const double MU[3] = {.06, .04, .02};
+
+   const double L1 = l_cascade[n-1] - 1;
+   const double R1 = r_cascade[n-1] - 1;
+         double L2 = n * (l_cascade[n-1] - 1);
+         double R2 = n * (r_cascade[n-1] - 1);
+
+   for (int i = n+1 ; i < slen+1 ; i++) {
+      L2 += l_cascade[i-1] - 1;
+      R2 += r_cascade[i-1] - 1;
+   }
+
+   double loglik = -INFINITY;
+   size_t best_N0 = 0.0;
+   double best_mu = 0.0;
+
+   for (int iter = 0 ; iter < 3 ; iter++) {
+
+      double mu = MU[iter];
+
+      double L3 = L2 / (1-mu) - L1 / mu;
+      double R3 = R2 / (1-mu) - R1 / mu;
+
+      double C = (1 - pow(1-mu,n)) / (n * pow(1-mu,n-1));
+
+      // Compute the number of duplicates.
+      double N0 = (L1+R1 + C*(L3+R3)) / 2.0;
+//      double N0 = L1 + C*L3;
+
+      if (N0 < 1.0) N0 = 1.0;
+
+      double tmp = 2*lgamma(N0+1) + (L1+R1) * log(mu)
+         + (L2+R2) * log(1-mu)
+         + (2*N0 - (L1+L2)) * log(1-pow(1-mu,n))
+         - lgamma(N0-L1+1)  - lgamma(N0-R1+1);
+//      double tmp = lgamma(N0+1) + L1 * log(mu) + L2 * log(1-mu)
+//         + (N0-L1) * log(1-pow(1-mu,n)) - lgamma(N0-L1+1);
+
+      if (tmp < loglik) {
+         break;
+      }
+
+      loglik = tmp;
+      best_N0 = round(N0);
+      best_mu = mu;
+
+   }
+
+   return (uN0_t) { best_mu, best_N0 };
+
+}
+
+
 double
 quality
 (
@@ -263,7 +340,7 @@ quality
    range = idx.lut->kmer[merid];
 
    for ( ; mlen < slen ; mlen++) {
-      if (NONALPHABET[(uint8_t) aln.refseq[slen-mlen-1]])
+      if (NONALPHABET[(uint8_t) aln.refseq[mlen]])
          return 0.0/0.0;
       int c = REVCMP[(uint8_t) aln.refseq[mlen]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
@@ -271,6 +348,7 @@ quality
       r_cascade[mlen] = range.top - range.bot + 1;
    }
 
+#if 0
    // Here we need to pay attention to the fact that C is
    // 0-based, which creates some confusion for the value
    // of 'n'. For clarity, we say that 'n' is the first
@@ -325,6 +403,12 @@ quality
       best_mu = mu;
 
    }
+#endif
+
+   uN0_t uN0 = estimate_uN0(l_cascade, r_cascade, slen);
+
+   double best_mu = uN0.u;
+   double best_N0 = uN0.N0;
 
    double typeI = prob_typeI_MEM_failure(slen, best_mu, best_N0) / 5;
    double typeII = prob_typeII_MEM_failure(slen, best_mu, best_N0);
