@@ -52,13 +52,11 @@
    do { if (x) { fprintf(stderr, "error: %s %s:%d:%s()\n", #x, \
          __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
 
-
 typedef struct uN0_t uN0_t;
 struct uN0_t {
    double u;
    size_t N0;
 };
-
 
 void
 build_index
@@ -224,37 +222,81 @@ load_index
 uN0_t
 estimate_uN0
 (
-   const size_t * l_cascade,
-   const size_t * r_cascade,
-   const size_t   slen
+   const char    * seq,
+   const index_t   idx
 )
 {
 
-   // Here we need to pay attention to the fact that C is
-   // 0-based, which creates some confusion for the value
-   // of 'n'. For clarity, we say that 'n' is the first
-   // number in the 1-based convension, and we shift it
-   // by 1 when accessing C arrays.
-   
-   // FIXME: another weak assert.
-   assert (GAMMA + 3 < slen);
+   const size_t n = 21;
+   const double MU[3] = { .06, .04, .02 };
 
-   const int n = GAMMA + 4; // Skip the first GAMMA + 3.
-   const double MU[3] = {.06, .04, .02};
+   size_t L1, L2, R1, R2;
+   L1 = L2 = R1 = R2 = 0;
+   int mlen;
 
-   const double L1 = l_cascade[n-1] - 1;
-   const double R1 = r_cascade[n-1] - 1;
-         double L2 = n * (l_cascade[n-1] - 1);
-         double R2 = n * (r_cascade[n-1] - 1);
+   size_t merid = 0;
 
-   for (int i = n+1 ; i < slen+1 ; i++) {
-      L2 += l_cascade[i-1] - 1;
-      R2 += r_cascade[i-1] - 1;
+   // Look up the beginning (reverse) of the query in lookup table.
+   for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      uint8_t c = ENCODE[(uint8_t) seq[30-mlen-1]];
+      merid = c + (merid << 2);
    }
+   range_t range = idx.lut->kmer[merid];
+
+   for ( ; mlen < 30 ; mlen++) {
+      if (NONALPHABET[(uint8_t) seq[30-mlen-1]])
+         return (uN0_t) { 0.0, 0 };
+      int c = ENCODE[(uint8_t) seq[30-mlen-1]];
+      range.bot = get_rank(idx.occ, c, range.bot - 1);
+      range.top = get_rank(idx.occ, c, range.top) - 1;
+      // TODO: shortcut when the range has length 1.
+      if (mlen == 20) {
+         L1 = range.top - range.bot;
+         L2 = n * L1;
+      }
+      if (mlen > 20) {
+         L2 += range.top - range.bot;
+      }
+   }
+
+   L1 -= range.top - range.bot;
+
+   merid = 0;
+
+   // Look up the beginning (forward) of the query in lookup table.
+   for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      uint8_t c = REVCMP[(uint8_t) seq[mlen]];
+      merid = c + (merid << 2);
+   }
+   range = idx.lut->kmer[merid];
+
+   for ( ; mlen < 30 ; mlen++) {
+      if (NONALPHABET[(uint8_t) seq[mlen]])
+         return (uN0_t) { 0.0, 0 };
+      int c = REVCMP[(uint8_t) seq[mlen]];
+      range.bot = get_rank(idx.occ, c, range.bot - 1);
+      range.top = get_rank(idx.occ, c, range.top) - 1;
+      // TODO: shortcut as above.
+      if (mlen == 20) {
+         R1 = range.top - range.bot;
+         R2 = n * R1;
+      }
+      if (mlen > 20) {
+         R2 += range.top - range.bot;
+      }
+   }
+
+   R1 -= range.top - range.bot;
 
    double loglik = -INFINITY;
    size_t best_N0 = 0.0;
    double best_mu = 0.0;
+
+   double C[3] = {
+       (1 - pow(1-.06,n)) / (n * pow(1-.06,n-1)),
+       (1 - pow(1-.04,n)) / (n * pow(1-.04,n-1)),
+       (1 - pow(1-.02,n)) / (n * pow(1-.02,n-1)),
+   };
 
    for (int iter = 0 ; iter < 3 ; iter++) {
 
@@ -263,20 +305,13 @@ estimate_uN0
       double L3 = L2 / (1-mu) - L1 / mu;
       double R3 = R2 / (1-mu) - R1 / mu;
 
-      double C = (1 - pow(1-mu,n)) / (n * pow(1-mu,n-1));
-
       // Compute the number of duplicates.
-      double N0 = (L1+R1 + C*(L3+R3)) / 2.0;
-//      double N0 = L1 + C*L3;
-
+      double N0 = (L1+R1 + C[iter]*(L3+R3)) / 2.0;
       if (N0 < 1.0) N0 = 1.0;
 
-      double tmp = 2*lgamma(N0+1) + (L1+R1) * log(mu)
-         + (L2+R2) * log(1-mu)
-         + (2*N0 - (L1+L2)) * log(1-pow(1-mu,n))
-         - lgamma(N0-L1+1)  - lgamma(N0-R1+1);
-//      double tmp = lgamma(N0+1) + L1 * log(mu) + L2 * log(1-mu)
-//         + (N0-L1) * log(1-pow(1-mu,n)) - lgamma(N0-L1+1);
+      double tmp = 2 * lgamma(N0+1) + (L1+R1) * log(mu) +
+         (L2+R2) * log(1-mu) + (2*N0-L1-R1) * log(1-pow(1-mu,n)) -
+         (lgamma(N0-L1+1) + lgamma(N0-R1+1));
 
       if (tmp < loglik) {
          break;
@@ -293,141 +328,126 @@ estimate_uN0
 }
 
 
+int
+cmpN0
+(
+   const void * a,
+   const void * b
+)
+{
+   uN0_t A = *(uN0_t *) a;
+   uN0_t B = *(uN0_t *) b;
+
+   return (A.N0 > B.N0) - (A.N0 < B.N0);
+
+}
+
+
 double
 quality
 (
          aln_t   aln,
-   const char * seq,
+   const char *  seq,
          index_t idx
 )
 {
 
-   size_t slen = strlen(seq);
-
+   double slen = strlen(seq);
    assert(slen < 250);
-   size_t l_cascade[250] = {0};
-   size_t r_cascade[250] = {0};
 
-   size_t merid;
-   int mlen;
+   uN0_t uN0[50];
 
-   // Bacwkard search on the hit.
-   range_t range;
-
-   // Look up the beginning (reverse) of the query in lookup table.
-   merid = 0;
-   for (mlen = 0 ; mlen < LUTK ; mlen++) {
-      uint8_t c = ENCODE[(uint8_t) aln.refseq[slen-1-mlen]];
-      merid = c + (merid << 2);
-   }
-   range = idx.lut->kmer[merid];
-
-   for ( ; mlen < slen ; mlen++) {
-      if (NONALPHABET[(uint8_t) aln.refseq[slen-mlen-1]])
-         return 0.0/0.0;
-      int c = ENCODE[(uint8_t) aln.refseq[slen-mlen-1]];
-      range.bot = get_rank(idx.occ, c, range.bot - 1);
-      range.top = get_rank(idx.occ, c, range.top) - 1;
-      l_cascade[mlen] = range.top - range.bot + 1;
+   int tot = 0;
+   for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
+      uN0[tot] = estimate_uN0(aln.refseq + s, idx);
    }
 
-   // Look up the beginning (forward) of the query in lookup table.
-   merid = 0;
-   for (mlen = 0 ; mlen < LUTK ; mlen++) {
-      uint8_t c = REVCMP[(uint8_t) aln.refseq[mlen]];
-      merid = c + (merid << 2);
-   }
-   range = idx.lut->kmer[merid];
-
-   for ( ; mlen < slen ; mlen++) {
-      if (NONALPHABET[(uint8_t) aln.refseq[mlen]])
-         return 0.0/0.0;
-      int c = REVCMP[(uint8_t) aln.refseq[mlen]];
-      range.bot = get_rank(idx.occ, c, range.bot - 1);
-      range.top = get_rank(idx.occ, c, range.top) - 1;
-      r_cascade[mlen] = range.top - range.bot + 1;
+   // Find min/max N0.
+   int minN0 = 64000;
+   int maxN0 = 0;
+   double minu = 1.0;
+   for (int i = 0 ; i < tot ; i++) {
+      if (uN0[i].N0 > maxN0) maxN0 = uN0[i].N0;
+      if (uN0[i].N0 < minN0) minN0 = uN0[i].N0;
+      if (uN0[i].u < minu) minu = uN0[i].u;
    }
 
-#if 0
-   // Here we need to pay attention to the fact that C is
-   // 0-based, which creates some confusion for the value
-   // of 'n'. For clarity, we say that 'n' is the first
-   // number in the 1-based convension, and we shift it
-   // by 1 when accessing C arrays.
-   
-   // FIXME: another weak assert.
-   assert (GAMMA + 3 < slen);
+   if (maxN0 < 10 * minN0 || maxN0 < 20) {
+      // All the estimates of N0 are similar. Take the median.
+      qsort(uN0, tot, sizeof(uN0_t), cmpN0);
 
-   const int n = GAMMA + 4; // Skip the first GAMMA + 3.
-   const double MU[3] = {.06, .04, .02};
+      double best_mu = uN0[tot/2].u;
+      double best_N0 = uN0[tot/2].N0;
 
-   const double L1 = l_cascade[n-1] - 1;
-   const double R1 = r_cascade[n-1] - 1;
-         double L2 = n * (l_cascade[n-1] - 1);
-         double R2 = n * (r_cascade[n-1] - 1);
+      double P = 1-exp(-(slen-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
+      double typeI = prob_typeI_MEM_failure(slen, best_mu, best_N0) * P;
+      double typeII = prob_typeII_MEM_failure(slen, best_mu, best_N0);
 
-   for (int i = n+1 ; i < slen+1 ; i++) {
-      L2 += l_cascade[i-1] - 1;
-      R2 += r_cascade[i-1] - 1;
-   }
-
-   double loglik = -INFINITY;
-   size_t best_N0 = 0.0;
-   double best_mu = 0.0;
-
-   for (int iter = 0 ; iter < 3 ; iter++) {
-
-      double mu = MU[iter];
-
-      double L3 = L2 / (1-mu) - L1 / mu;
-      double R3 = R2 / (1-mu) - R1 / mu;
-
-      double C = (1 - pow(1-mu,n)) / (n * pow(1-mu,n-1));
-
-      // Compute the number of duplicates.
-      double N0 = (L1+R1 + C*(L3+R3)) / 2.0;
-
-      if (N0 < 1.0) N0 = 1.0;
-
-      double tmp = 2*lgamma(N0+1) + (L1+R1) * log(mu)
-         + (L2+R2) * log(1-mu)
-         + (2*N0 - (L1+L2)) * log(1-pow(1-mu,n))
-         - lgamma(N0-L1+1)  - lgamma(N0-L2+1);
-
-      if (tmp < loglik) {
-         break;
+      if (maxN0 == 1 && minu == 0.06) {
+         // Special "high confidence" case.
+         // Approximately 45% chance of a mutation within 10 bp.
+         // We compute the probability of the minimum number of
+         // mutations to miss the duplicate.
+         double prob_miss = pow(.25, 1+tot/2);
+         typeII *= prob_miss;
       }
 
-      loglik = tmp;
-      best_N0 = round(N0);
-      best_mu = mu;
+      // Binomial terms (type I).
+      double A = lgamma(slen+1) - lgamma(slen-aln.score+1) -
+         lgamma(aln.score+1) + aln.score * log(0.01) +
+         (slen-aln.score) * log(0.99);
+      double B = lgamma(slen-GAMMA+1) - lgamma(slen-GAMMA-aln.score+1) -
+         lgamma(aln.score+1) + aln.score * log(0.75) +
+         (slen-GAMMA-aln.score) * log(0.25);
+      double prob_typeI_given_data =
+         1.0 / ( 1.0 + exp(A + log(1-typeI) - B - log(typeI)) );
+
+      return prob_typeI_given_data + typeII >= 1.0 ? 1.0 :
+         prob_typeI_given_data + typeII;
 
    }
-#endif
+   else {
+      // The estimates vary a lot. Split the read.
+      // Find the cut point (use max SSE inter).
+      double s1 = log(uN0[0].N0) + log(uN0[1].N0);
+      double s2 = 0; for (int i = 2 ; i < tot ; i++, s2 += log(uN0[i].N0));
+      int n1 = 2;
+      int n2 = tot-2;
+      double maxC = pow(s1,2)/n1 + pow(s2,2)/n2;
+      int bkpt = 1;
+      for (int i = 2 ; i < tot-2 ; i++) {
+         n1++;
+         n2--;
+         s1 += log(uN0[i].N0);
+         s2 -= log(uN0[i].N0);
+         double C = pow(s1,2)/n1 + pow(s2,2)/n2;
+         if (C > maxC) {
+            maxC = C;
+            bkpt = i;
+         }
+      }
+      // Split (take separate medians).
+      int tot1 = bkpt+1;
+      int tot2 = tot - tot1;
+      qsort(uN0, tot1, sizeof(uN0_t), cmpN0);
+      qsort(uN0 + tot1, tot2, sizeof(uN0_t), cmpN0);
 
-   uN0_t uN0 = estimate_uN0(l_cascade, r_cascade, slen);
+      double best_mu1 = uN0[tot1/2].u;
+      int best_N01 = uN0[tot1/2].N0;
+      double best_mu2 = uN0[tot1 + tot2/2].u;
+      int best_N02 = uN0[tot1 + tot2/2].N0;
 
-   double best_mu = uN0.u;
-   double best_N0 = uN0.N0;
+      double P1 = 1-exp(-(tot1*10.0-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
+      double nada1 = prob_typeI_MEM_failure(tot1*10, best_mu1, best_N01) * P1;
+      double wrong1 = prob_typeII_MEM_failure(tot1*10, best_mu1, best_N01);
 
-   double typeI = prob_typeI_MEM_failure(slen, best_mu, best_N0) / 5;
-   double typeII = prob_typeII_MEM_failure(slen, best_mu, best_N0);
+      double P2 = 1-exp(-(tot2*10.0-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
+      double nada2 = prob_typeI_MEM_failure(tot2*10, best_mu2, best_N02) * P2;
+      double wrong2 = prob_typeII_MEM_failure(tot2*10, best_mu2, best_N02);
 
-   if (best_N0 == 1 && best_mu == 0.06)
-      typeII /= 5;
+      return nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
 
-   // Binomial terms (type I).
-   double A = lgamma(slen+1) - lgamma(slen-aln.score+1) -
-      lgamma(aln.score+1) + aln.score * log(0.01) +
-      (slen-aln.score) * log(0.99);
-   double B = lgamma(slen-GAMMA+1) - lgamma(slen-GAMMA-aln.score+1) -
-      lgamma(aln.score+1) + aln.score * log(0.75) +
-      (slen-GAMMA-aln.score) * log(0.25);
-   double prob_typeI_given_data =
-      1.0 / ( 1.0 + exp(A + log(1-typeI) - B - log(typeI)) );
-
-   return prob_typeI_given_data + typeII >= 1.0 ? 1.0 :
-      prob_typeI_given_data + typeII;
+   }
 
 }
 
@@ -489,10 +509,13 @@ batchmap
       aln_t aln = alnstack->aln[counter++ % alnstack->pos];
 
       char * apos = chr_string(aln.refpos, idx.chr);
+#ifdef DEBUG
+      fprintf(stderr, "%s\n", seq);
+#endif
       double prob = alnstack->pos > 1 ?
                         1.0 - 1.0 / alnstack->pos :
                         quality(aln, seq, idx);
-      fprintf(stdout, "%s\t%s\t%f\n", seq, apos, prob);
+      fprintf(stdout, "%s\t%s\t%e\n", seq, apos, prob);
 
       free(apos);
       free(alnstack);
