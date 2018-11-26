@@ -42,15 +42,10 @@ void          aln_push     (aln_t aln, alnstack_t ** stackp);
 int           seed_by_refpos (const void * a, const void * b) {
    return ((seed_t *)a)->refpos > ((seed_t *)b)->refpos;
 };
-int           seed_by_minscore_then_span (const void * a, const void * b) {
+int           seed_by_span (const void * a, const void * b) {
    seed_t * sa = (seed_t *)a;
    seed_t * sb = (seed_t *)b;
-   if (sa->minscore > sb->minscore)
-      return 1;
-   else if (sa->minscore < sb->minscore)
-      return -1;
-   else
-      return sa->span < sb->span;
+   return sa->span < sb->span;
 };
 
 int           mem_by_start (const void * a, const void * b) {
@@ -319,7 +314,7 @@ align
       
       if (chain->minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS) {
 	 if (DEBUG_VERBOSE)
-	    fprintf(stdout, "[break: chain] %d+ alignments with best_score(%d)\n", MAX_MINSCORE_REPEATS, best_score);
+	    fprintf(stdout, "[break: chain] reached %d+ alignments with best_score(%d)\n", MAX_MINSCORE_REPEATS, best_score);
 	 break;
       }
 
@@ -346,21 +341,18 @@ align
 
       if (nloc == 0) {
 	 if (DEBUG_VERBOSE)
-	    fprintf(stdout, "[skip: chain] No seeds after removing duplicates\n");
+	    fprintf(stdout, "[skip: chain] No seeds after removing alignment duplicates\n");
 	 continue;
       }
 
       if (DEBUG_VERBOSE)
-	 fprintf(stdout, "[MEM chain %d] %ld seeds after removing duplicates\n", i, nloc);
+	 fprintf(stdout, "[MEM chain %d] %ld seeds after removing alignment duplicates\n", i, nloc);
 
       // Sort seeds by genomic position.
       qsort(seeds, nloc, sizeof(seed_t), seed_by_refpos);
 
       // Chain seeds to avoid duplicated alignments.
       int cur = 0;
-      memchain_t * seedchain = memchain_new(8);
-      mem_push(seeds[0].mem, &seedchain);
-
       size_t chain_gap_beg = seeds[cur].refpos + (seeds[cur].mem->end - seeds[cur].mem->beg + 1);
       size_t chain_gap_end = seeds[cur].refpos + (slen - seeds[cur].mem->beg) - 1;
 
@@ -370,18 +362,15 @@ align
 	 size_t seed_ref_beg = seeds[j].refpos;
 	 size_t seed_ref_end = seed_ref_beg + (seeds[j].mem->end - seeds[j].mem->beg);
 	 if (seeds[cur].mem != seeds[j].mem && chain_gap_beg <= seed_ref_beg && seed_ref_end <= chain_gap_end) {
+	    // Seed j is within current chain.
+	    // Update seed chain span.
 	    seeds[cur].span += (seeds[j].mem->end - seeds[j].mem->beg + 1);
+	    // Set seed j span to 0.
 	    seeds[j].span = 0;
-	    seeds[j].minscore = slen;
-	    mem_push(seeds[j].mem, &seedchain);
 	 } else {
-	    // Compute minimum score of seed chain.
-	    seeds[cur].minscore = chain_min_score(seedchain, gamma, slen);
-	    // Update current seed.
+	    // Seed j is outside current chain.
+	    // Update current chain.
 	    cur = j;
-	    // Reset seed chain.
-	    seedchain->pos = 0;
-	    mem_push(seeds[cur].mem, &seedchain);
 	    // Update gap coordinates.
 	    chain_gap_beg = seeds[cur].refpos + (seeds[cur].mem->end - seeds[cur].mem->beg + 1);
 	    chain_gap_end = seeds[cur].refpos + (slen - seeds[cur].mem->beg) - 1;
@@ -392,14 +381,9 @@ align
 
       if (DEBUG_VERBOSE)
 	 fprintf(stdout, "[MEM chain %d] %ld seeds after chaining\n", i, nchain);
-	    
-      // Compute minimum score of last seed chain.
-      seeds[cur].minscore = chain_min_score(seedchain, gamma, slen);
-	    
-      free(seedchain);
-
+  
       // Sort seeds by span and align them.
-      qsort(seeds, nloc, sizeof(seed_t), seed_by_minscore_then_span);
+      qsort(seeds, nloc, sizeof(seed_t), seed_by_span);
 
       for (int j = 0; j < nloc; j++) {
 	 seed_t seed = seeds[j];
@@ -407,18 +391,13 @@ align
 	 if (!seed.span) break;
 	 if (DEBUG_VERBOSE) {
 	    char * strpos  = chr_string(seed.refpos, idx.chr);
-	    fprintf(stdout, "seed: refpos: %ld (%s), span: %ld, minscore: %d\n", seed.refpos, strpos, seed.span, seed.minscore);
+	    fprintf(stdout, "seed: refpos: %ld (%s), span: %ld\n", seed.refpos, strpos, seed.span);
 	    free(strpos);
 	 }
-	 // Stop when minscore > best.
-	 if (seed.minscore > best_score) {
+	 // Stop when minscore max repeats is reached.
+	 if (chain->minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS) {
 	    if (DEBUG_VERBOSE)
-	       fprintf(stdout, "[break: align] seed.minscore > best_score\n");
-	    break;
-	 }
-	 if (seed.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS) {
-	    if (DEBUG_VERBOSE)
-	       fprintf(stdout, "[break: align] %d+ alignments with best_score(%d)\n", MAX_MINSCORE_REPEATS, best_score);
+	       fprintf(stdout, "[break: align] reached %d+ alignments with best_score(%d)\n", MAX_MINSCORE_REPEATS, best_score);
 	    break;
 	 }
 	 
@@ -442,7 +421,7 @@ align
 	 
 	    // VERBOSE ALIGNMENT (DEBUG)
 	    if (DEBUG_VERBOSE) {
-	       fprintf(stdout, "locus: %ld (seed.minscore: %d, best_score: %d)\n", seed.refpos, seed.minscore, best_score);
+	       fprintf(stdout, "locus: %ld (chain.minscore: %d, best_score: %d)\n", seed.refpos, chain->minscore, best_score);
 	       fprintf(stdout, "%.*s %.*s %.*s\n",
 		       (int)mem->beg, seq, (int) (mem->end - mem->beg + 1),
 		       seq + mem->beg, (int)(slen-mem->end-1), seq + mem->end + 1);
