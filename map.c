@@ -1,10 +1,13 @@
 #include "map.h"
+#define max(x,y) ((x) > (y) ? (x) : (y))
+#define min(x,y) ((x) < (y) ? (x) : (y))
 
 typedef struct memchain_t memchain_t;
 typedef struct seed_t     seed_t;
 
 #define MEM_MAX_LOCI 1000
 #define MAX_MINSCORE_REPEATS 2
+#define MAX_ALIGN_MISMATCHES 30
 
 #ifdef DEBUG
 int DEBUG_VERBOSE = 1;
@@ -217,18 +220,16 @@ chain_min_score
    // Add mismatches at chain ends.
    
    if (chain->mem[0]->beg > 0)
-      minscore += ((chain->mem[0]->beg - 1) / gamma) + 1;
+      minscore += max(0,chain->mem[0]->beg / gamma - 1) + 1;
 
    if (chain->mem[chain->pos-1]->end < seqlen-1)
-      minscore += (seqlen - 2 - chain->mem[chain->pos-1]->end)/gamma + 1;
+      minscore += max(0,(seqlen - 2 - chain->mem[chain->pos-1]->end)/gamma - 1) + 1;
 
    // Add gap mismatches.
    for (int i = 1; i < chain->pos; i++) {
       // A gap implies one mismatch, even if it's a gap of length 0.
-      minscore++;
       int gap_size = chain->mem[i]->beg - chain->mem[i-1]->end - 1;
-      minscore += gap_size > 1;
-      minscore += (gap_size-2)/gamma;
+      minscore += max(0,gap_size / gamma - 1) + 1;
    }
 
    return minscore;
@@ -299,7 +300,7 @@ align
    }
 
 
-   int best_score = slen;
+   int best_score = min(slen, MAX_ALIGN_MISMATCHES);
    alnstack_t * best = alnstack_new(10);
    
    // Iterate over sorted MEM chains.
