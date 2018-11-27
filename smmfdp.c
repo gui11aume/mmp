@@ -409,13 +409,14 @@ quality
    else {
       // The estimates vary a lot. Split the read.
       // Find the cut point (use max SSE inter).
-      double s1 = log(uN0[0].N0) + log(uN0[1].N0);
-      double s2 = 0; for (int i = 2 ; i < tot ; i++, s2 += log(uN0[i].N0));
-      int n1 = 2;
-      int n2 = tot-2;
+      double s1 = log(uN0[0].N0);
+      double s2 = 0;
+      for (int i = 1 ; i < tot ; i++) { s2 += log(uN0[i].N0); }
+      int n1 = 1;
+      int n2 = tot-1;
       double maxC = pow(s1,2)/n1 + pow(s2,2)/n2;
-      int bkpt = 1;
-      for (int i = 2 ; i < tot-2 ; i++) {
+      int bkpt = 0;
+      for (int i = 1 ; i < tot-1 ; i++) {
          n1++;
          n2--;
          s1 += log(uN0[i].N0);
@@ -436,14 +437,27 @@ quality
       int best_N01 = uN0[tot1/2].N0;
       double best_mu2 = uN0[tot1 + tot2/2].u;
       int best_N02 = uN0[tot1 + tot2/2].N0;
+      
+      if (best_N01 < 10*best_N02 && best_N02 < 10*best_N01) {
+         // The read is fishy (possibly it has a repeat in the middle).
+         // Reduce the confidence by taking the max N0 on each
+         // segment instead.
+         best_mu1 = uN0[tot1-1].u;
+         best_N01 = uN0[tot1-1].N0;
+         best_mu2 = uN0[tot -1].u;
+         best_N02 = uN0[tot -1].N0;
+      }
 
-      double P1 = 1-exp(-(tot1*10.0-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-      double nada1 = prob_typeI_MEM_failure(tot1*10, best_mu1, best_N01) * P1;
-      double wrong1 = prob_typeII_MEM_failure(tot1*10, best_mu1, best_N01);
+      double l1 = (tot % 2 == 0) ? 10 + 10*tot1 : 5  + 10*tot1;
+      double l2 = (tot % 2 == 0) ? 10 + 10*tot2 : 15 + 10*tot2;
 
-      double P2 = 1-exp(-(tot2*10.0-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-      double nada2 = prob_typeI_MEM_failure(tot2*10, best_mu2, best_N02) * P2;
-      double wrong2 = prob_typeII_MEM_failure(tot2*10, best_mu2, best_N02);
+      double P1 = 1-exp(-(l1-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
+      double nada1 = prob_typeI_MEM_failure(l1, best_mu1, best_N01) * P1;
+      double wrong1 = prob_typeII_MEM_failure(l1, best_mu1, best_N01);
+
+      double P2 = 1-exp(-(l2-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
+      double nada2 = prob_typeI_MEM_failure(l2, best_mu2, best_N02) * P2;
+      double wrong2 = prob_typeII_MEM_failure(l2, best_mu2, best_N02);
 
       return nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
 
