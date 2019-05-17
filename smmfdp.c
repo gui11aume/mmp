@@ -353,6 +353,7 @@ quality
 {
 
    double slen = strlen(seq);
+   // TODO: fix weak assert. //
    assert(slen < 250);
 
    uN0_t uN0[50];
@@ -451,12 +452,10 @@ quality
       double l1 = (tot % 2 == 0) ? 10 + 10*tot1 : 5  + 10*tot1;
       double l2 = (tot % 2 == 0) ? 10 + 10*tot2 : 15 + 10*tot2;
 
-      double P1 = 1-exp(-(l1-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-      double nada1 = prob_typeI_MEM_failure(l1, best_mu1, best_N01) * P1;
+      double nada1 = prob_typeI_MEM_failure(l1, best_mu1, best_N01);
       double wrong1 = prob_typeII_MEM_failure(l1, best_mu1, best_N01);
 
-      double P2 = 1-exp(-(l2-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-      double nada2 = prob_typeI_MEM_failure(l2, best_mu2, best_N02) * P2;
+      double nada2 = prob_typeI_MEM_failure(l2, best_mu2, best_N02);
       double wrong2 = prob_typeII_MEM_failure(l2, best_mu2, best_N02);
 
       return nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
