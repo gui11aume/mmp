@@ -210,21 +210,27 @@ chain_min_score
  const int    seqlen
  )
 {
+   // Commented lines remove the MEM masking bug.
+   // The code was not removed because the idea can
+   // be reused with fixed-length seeds.
    int minscore = 0;
 
    // Add mismatches at chain ends.
    
    if (chain->mem[0]->beg > 0)
-      minscore += max(0,chain->mem[0]->beg / gamma - 1) + 1;
+      //minscore += max(0,chain->mem[0]->beg / gamma - 1) + 1;
+      minscore += 1;
 
    if (chain->mem[chain->pos-1]->end < seqlen-1)
-      minscore += max(0,(seqlen - 2 - chain->mem[chain->pos-1]->end)/gamma - 1) + 1;
+      //minscore += max(0,(seqlen - 2 - chain->mem[chain->pos-1]->end)/gamma - 1) + 1;
+      minscore += 1;
 
    // Add gap mismatches.
    for (int i = 1; i < chain->pos; i++) {
       // A gap implies one mismatch, even if it's a gap of length 0.
-      int gap_size = chain->mem[i]->beg - chain->mem[i-1]->end - 1;
-      minscore += max(0,gap_size / gamma - 1) + 1;
+      //int gap_size = chain->mem[i]->beg - chain->mem[i-1]->end - 1;
+      //minscore += max(0,gap_size / gamma - 1) + 1;
+      minscore += 1;
    }
 
    return minscore;
@@ -504,7 +510,7 @@ mapread
       range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
       int mpos = end, mlen = 0;
 
-      // Look up the beginning (reverse) of the query in lookup table.
+      // Query the beginning of the read in lookup table.
       if (end >= LUTK - 1) {
          size_t merid = 0;
          for ( ; mlen < LUTK ; mlen++, mpos--) {
@@ -539,7 +545,7 @@ mapread
       mem.beg = ++mpos;
       mem.range = range;
 
-      // Keep MEM if above minimum size.
+      // Keep MEM if above minimum length.
       if (mlen >= gamma) {
          mem_t * m = malloc(sizeof(mem_t));
          exit_on_memory_error(m);
