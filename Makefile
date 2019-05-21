@@ -2,7 +2,7 @@ P= smmfdp
 
 CC= gcc
 CFLAGS= -std=c99 -Wall
-OBJECTS= bwt.o map.o divsufsort.o mem_seed_prob.o
+OBJECTS= bwt.o map.o divsufsort.o sesame.o
 
 all: CFLAGS += -DNDEBUG -O3
 all: $(P)

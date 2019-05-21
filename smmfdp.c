@@ -5,7 +5,7 @@
 #include "bwt.h"
 #include "map.h"
 #include "divsufsort.h"
-#include "mem_seed_prob.h"
+#include "sesame.h"
 
 #define GAMMA 17
 
@@ -380,31 +380,39 @@ quality
       double best_mu = uN0[tot/2].u;
       double best_N0 = uN0[tot/2].N0;
 
+      // Probability of a purely random hit.
       double P = 1-exp(-(slen-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-      double typeI = prob_typeI_MEM_failure(slen, best_mu, best_N0) * P;
-      double typeII = prob_typeII_MEM_failure(slen, best_mu, best_N0);
+      // Probabilities of seeding errors.
+      double pnul = auto_mem_seed_nullp(slen, best_mu, best_N0) * P;
+      double poff = auto_mem_seed_offp(slen, best_mu, best_N0);
 
       if (maxN0 == 1 && minu == 0.06) {
-         // Special "high confidence" case.
-         // Approximately 45% chance of a mutation within 10 bp.
-         // We compute the probability of the minimum number of
-         // mutations to miss the duplicate.
-         double prob_miss = pow(.25, 1+tot/2);
-         typeII *= prob_miss;
+         // Special "high confidence" case. On every segment, the
+         // estimate of N0 is 1. However, this minimum value is
+         // pessimistic because it is also possible that N0 is 0,
+         // in which case seeding cannot be off target. So the
+         // probability that we are looking for is the probability
+         // that N0 is really equal to 1, times the probability that
+         // MEM seeding is off target.
+         // If there is a duplicate, it will be detected if there
+         // is a 10 bp window without difference. Since u = 0.06,
+         // each of those windows contains a difference with
+         // probability 0.461.
+         double pmiss = pow(.461, slen/5);
+         poff *= pmiss;
       }
 
-      // Binomial terms (type I).
+      // Binomial terms (for probability of null).
       double A = lgamma(slen+1) - lgamma(slen-aln.score+1) -
          lgamma(aln.score+1) + aln.score * log(0.01) +
          (slen-aln.score) * log(0.99);
       double B = lgamma(slen-GAMMA+1) - lgamma(slen-GAMMA-aln.score+1) -
          lgamma(aln.score+1) + aln.score * log(0.75) +
          (slen-GAMMA-aln.score) * log(0.25);
-      double prob_typeI_given_data =
-         1.0 / ( 1.0 + exp(A + log(1-typeI) - B - log(typeI)) );
+      double pnul_given_data =
+         1.0 / ( 1.0 + exp(A + log(1-pnul) - B - log(poff)) );
 
-      return prob_typeI_given_data + typeII >= 1.0 ? 1.0 :
-         prob_typeI_given_data + typeII;
+      return pnul_given_data + poff >= 1.0 ? 1.0 : pnul_given_data + poff;
 
    }
    else {
@@ -452,11 +460,14 @@ quality
       double l1 = (tot % 2 == 0) ? 10 + 10*tot1 : 5  + 10*tot1;
       double l2 = (tot % 2 == 0) ? 10 + 10*tot2 : 15 + 10*tot2;
 
-      double nada1 = prob_typeI_MEM_failure(l1, best_mu1, best_N01);
-      double wrong1 = prob_typeII_MEM_failure(l1, best_mu1, best_N01);
+      // Here we do not need to count the probability of a purely
+      // random hit.
 
-      double nada2 = prob_typeI_MEM_failure(l2, best_mu2, best_N02);
-      double wrong2 = prob_typeII_MEM_failure(l2, best_mu2, best_N02);
+      double nada1 = auto_mem_seed_nullp(l1, best_mu1, best_N01);
+      double wrong1 = auto_mem_seed_offp(l1, best_mu1, best_N01);
+
+      double nada2 = auto_mem_seed_nullp(l2, best_mu2, best_N02);
+      double wrong2 = auto_mem_seed_offp(l2, best_mu2, best_N02);
 
       return nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
 
@@ -504,8 +515,8 @@ batchmap
 
       if (rlen > maxlen) {
          maxlen = rlen;
-         // Initialize library with read length.
-         set_params_mem_prob(GAMMA, rlen, .01);
+         // (Re)initialize library.
+         sesame_set_static_params(GAMMA, rlen, .01);
       }
 
       alnstack_t * alnstack = mapread(seq, idx, genome, GAMMA);
@@ -536,7 +547,7 @@ batchmap
    }
 
    free(seq);
-   clean_mem_prob();
+   sesame_clean();
 
    // FIXME: Would be nice to do this, but the size is unknown.
    // FIXME: Either forget it, or store the size somewhere.
