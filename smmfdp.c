@@ -537,7 +537,7 @@ batchmap
          sesame_set_static_params(GAMMA, rlen, .01);
       }
 
-      alnstack_t * alnstack = mapread(seq, idx, genome, GAMMA);
+      alnstack_t * alnstack = mapread(seq, idx, genome, GAMMA, 0);
 
       if (!alnstack) exit(EXIT_FAILURE);
 
