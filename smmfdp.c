@@ -238,14 +238,17 @@ estimate_uN0
 
    // Look up the beginning (reverse) of the query in lookup table.
    for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      // Note: every "N" is considered a "A".
       uint8_t c = ENCODE[(uint8_t) seq[30-mlen-1]];
       merid = c + (merid << 2);
    }
    range_t range = idx.lut->kmer[merid];
 
    for ( ; mlen < 30 ; mlen++) {
+      // When there are "N" in the reference, the estimation
+      // must bail out because we cannot find the answer.
       if (NONALPHABET[(uint8_t) seq[30-mlen-1]])
-         return (uN0_t) { 0.0, 0 };
+         goto in_case_of_failure;
       int c = ENCODE[(uint8_t) seq[30-mlen-1]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
       range.top = get_rank(idx.occ, c, range.top) - 1;
@@ -265,14 +268,17 @@ estimate_uN0
 
    // Look up the beginning (forward) of the query in lookup table.
    for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      // Note: every "N" is considered a "T".
       uint8_t c = REVCMP[(uint8_t) seq[mlen]];
       merid = c + (merid << 2);
    }
    range = idx.lut->kmer[merid];
 
    for ( ; mlen < 30 ; mlen++) {
+      // When there are "N" in the reference, the estimation
+      // must bail out because we cannot find the answer.
       if (NONALPHABET[(uint8_t) seq[mlen]])
-         return (uN0_t) { 0.0, 0 };
+         goto in_case_of_failure;
       int c = REVCMP[(uint8_t) seq[mlen]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
       range.top = get_rank(idx.occ, c, range.top) - 1;
@@ -289,7 +295,7 @@ estimate_uN0
    R1 -= range.top - range.bot;
 
    double loglik = -INFINITY;
-   size_t best_N0 = 0.0;
+   size_t best_N0 = 0;
    double best_mu = 0.0;
 
    double C[3] = {
@@ -325,6 +331,10 @@ estimate_uN0
 
    return (uN0_t) { best_mu, best_N0 };
 
+in_case_of_failure:
+   // Return an impossible value.
+   return (uN0_t) { 0.0 / 0.0, -1 };
+
 }
 
 
@@ -358,9 +368,17 @@ quality
 
    uN0_t uN0[50];
 
+   // Assume the worst (many similar duplicates).
+   const double worst_case_mu = 0.02;
+   const size_t worst_case_N0 = 64000;
+
    int tot = 0;
    for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
       uN0[tot] = estimate_uN0(aln.refseq + s, idx);
+      // Case that estimation failed (e.g., because of "N").
+      if (uN0[tot].u != uN0[tot].u) {
+         uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0 };
+      }
    }
 
    // Find min/max N0.
