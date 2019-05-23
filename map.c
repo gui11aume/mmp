@@ -475,7 +475,7 @@ mem_alignments
    // Sort alncd by span and align them.
    qsort(alncd, nloc, sizeof(align_t), seed_by_span);
 
-   return (aligncd_t){nloc, alncd};
+   return (aligncd_t){nchain, alncd};
 }
 
 void
@@ -490,6 +490,9 @@ align
 {
    seed_t * seed = alignment.seed;
    size_t   slen = strlen(seq);
+
+   if (seed->beg > alignment.refpos)
+      return;
 
    // Get genomic sequence
    const char * ref = genome + alignment.refpos - seed->beg;
@@ -588,10 +591,19 @@ mapread
 	    // Do not align chained alncd.
 	    if (!alignment.span || (mem_chain->minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS))
 	       break;
+
+	    // Check genome limits.
+	    if (alignment.seed->beg > alignment.refpos || alignment.refpos + slen - alignment.seed->beg >= idx.occ->txtlen) {
+	       if (DEBUG_VERBOSE) {
+		  char * strpos  = chr_string(alignment.refpos, idx.chr);
+		  fprintf(stdout, "alignment out of genome bounds: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, mem_chain->minscore);
+	       }
+	       continue;
+	    }
 	    
 	    if (DEBUG_VERBOSE) {
 	       char * strpos  = chr_string(alignment.refpos, idx.chr);
-	       fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld\n", alignment.refpos, strpos, alignment.span);
+	       fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, mem_chain->minscore);
 	       free(strpos);
 	    }
 	 
