@@ -14,9 +14,9 @@
 
 typedef struct alnstack_t alnstack_t;
 typedef struct aln_t      aln_t;
-typedef struct mem_t      mem_t;
+typedef struct seed_t     seed_t;
 
-struct mem_t {
+struct seed_t {
          size_t    beg;
          size_t    end;
          range_t   range;
@@ -26,10 +26,9 @@ struct mem_t {
 
 struct aln_t {
          int      score;
-         int      nmem;
          size_t   refpos;
    const char   * refseq;
-         mem_t    mem;
+         seed_t   seed;
 };
 
 struct alnstack_t {
@@ -39,6 +38,6 @@ struct alnstack_t {
 };
 
 
-alnstack_t * mapread (const char *, index_t, const char *, size_t);
+alnstack_t * mapread (const char *, const index_t, const char *, const size_t, const int);
 
 #endif
