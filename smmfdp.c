@@ -8,6 +8,7 @@
 #include "sesame.h"
 
 #define GAMMA 17
+#define PROBDEFAULT 0.01
 
 // ------- Machine-specific code ------- //
 // The 'mmap()' option 'MAP_POPULATE' is available
@@ -57,6 +58,8 @@ struct uN0_t {
    double u;
    size_t N0;
 };
+
+static double PROB = PROBDEFAULT;
 
 void
 build_index
@@ -412,11 +415,13 @@ quality
          // probability that we are looking for is the probability
          // that N0 is really equal to 1, times the probability that
          // MEM seeding is off target.
-         // If there is a duplicate, it will be detected if there
-         // is a 10 bp window without difference. Since u = 0.06,
-         // each of those windows contains a difference with
-         // probability 0.461.
-         double pmiss = pow(.461, slen/5);
+         //
+         // Since u = 0.06, each 10-bp window contains a difference
+         // with probability 0.461. If there is a difference in the
+         // central window of each 30 bp segment used for the
+         // estimation, the duplicate will not be discovered.
+         double pdiff = pow(.461, tot);
+         double pmiss = 0.2 * pdiff / (0.8 + 0.2 * pdiff); // Bayes formula.
          poff *= pmiss;
       }
 
@@ -531,10 +536,25 @@ batchmap
       // Remove newline character if present.
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
 
+      // If fasta header, print sequence name.
+
+// XXX BENCHMARK STUFF XXX //
+#ifdef FASTOUT
+      if (seq[0] == '>') {
+         fprintf(stdout, ">%s\n", seq+1);
+         continue;
+      }
+#else
+      if (seq[0] == '>') {
+         fprintf(stdout, "%s\t", seq+1);
+         continue;
+      }
+#endif
+
       if (rlen > maxlen) {
          maxlen = rlen;
          // (Re)initialize library.
-         sesame_set_static_params(GAMMA, rlen, .01);
+         sesame_set_static_params(GAMMA, rlen, PROB);
       }
 
       alnstack_t * alnstack = mapread(seq, idx, genome, GAMMA, 0);
@@ -550,13 +570,17 @@ batchmap
 
       aln_t aln = alnstack->aln[counter++ % alnstack->pos];
 
+
       char * apos = chr_string(aln.refpos, idx.chr);
-#ifdef DEBUG
-      fprintf(stderr, "%s\n", seq);
-#endif
+
+// XXX BENCHMARK STUFF XXX //
+#ifdef NOQUAL
+      const double prob = 1.0;
+#else
       double prob = alnstack->pos > 1 ?
                         1.0 - 1.0 / alnstack->pos :
                         quality(aln, seq, idx);
+#endif
       fprintf(stdout, "%s\t%s\t%e\n", seq, apos, prob);
 
       free(apos);
@@ -596,6 +620,14 @@ int main(int argc, char ** argv) {
       if (argc < 4) {
          fprintf(stderr, "Specify index and read file.\n");
          exit(EXIT_FAILURE);
+      }
+      // Argument 5 is sequencing error.
+      if (argc == 5) {
+         PROB = strtod(argv[4], NULL);
+         if (PROB <= 0 || PROB >= 1) {
+            fprintf(stderr, "Sequencing error must be in (0,1).\n");
+            exit(EXIT_FAILURE);
+         }
       }
       batchmap(argv[2], argv[3]);
    }
