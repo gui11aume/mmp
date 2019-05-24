@@ -4,6 +4,7 @@ CC= gcc
 CFLAGS= -std=c99 -Wall
 OBJECTS= bwt.o map.o divsufsort.o sesame.o
 
+# development flags: -DNOQUAL -DFASTOUT
 all: CFLAGS += -DNDEBUG -O3
 all: $(P)
 

@@ -8,6 +8,7 @@
 #include "sesame.h"
 
 #define GAMMA 17
+#define PROBDEFAULT 0.01
 
 // ------- Machine-specific code ------- //
 // The 'mmap()' option 'MAP_POPULATE' is available
@@ -57,6 +58,8 @@ struct uN0_t {
    double u;
    size_t N0;
 };
+
+static double PROB = PROBDEFAULT;
 
 void
 build_index
@@ -238,14 +241,17 @@ estimate_uN0
 
    // Look up the beginning (reverse) of the query in lookup table.
    for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      // Note: every "N" is considered a "A".
       uint8_t c = ENCODE[(uint8_t) seq[30-mlen-1]];
       merid = c + (merid << 2);
    }
    range_t range = idx.lut->kmer[merid];
 
    for ( ; mlen < 30 ; mlen++) {
+      // When there are "N" in the reference, the estimation
+      // must bail out because we cannot find the answer.
       if (NONALPHABET[(uint8_t) seq[30-mlen-1]])
-         return (uN0_t) { 0.0, 0 };
+         goto in_case_of_failure;
       int c = ENCODE[(uint8_t) seq[30-mlen-1]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
       range.top = get_rank(idx.occ, c, range.top) - 1;
@@ -265,14 +271,17 @@ estimate_uN0
 
    // Look up the beginning (forward) of the query in lookup table.
    for (mlen = 0 ; mlen < LUTK ; mlen++) {
+      // Note: every "N" is considered a "T".
       uint8_t c = REVCMP[(uint8_t) seq[mlen]];
       merid = c + (merid << 2);
    }
    range = idx.lut->kmer[merid];
 
    for ( ; mlen < 30 ; mlen++) {
+      // When there are "N" in the reference, the estimation
+      // must bail out because we cannot find the answer.
       if (NONALPHABET[(uint8_t) seq[mlen]])
-         return (uN0_t) { 0.0, 0 };
+         goto in_case_of_failure;
       int c = REVCMP[(uint8_t) seq[mlen]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
       range.top = get_rank(idx.occ, c, range.top) - 1;
@@ -289,7 +298,7 @@ estimate_uN0
    R1 -= range.top - range.bot;
 
    double loglik = -INFINITY;
-   size_t best_N0 = 0.0;
+   size_t best_N0 = 0;
    double best_mu = 0.0;
 
    double C[3] = {
@@ -325,6 +334,10 @@ estimate_uN0
 
    return (uN0_t) { best_mu, best_N0 };
 
+in_case_of_failure:
+   // Return an impossible value.
+   return (uN0_t) { 0.0 / 0.0, -1 };
+
 }
 
 
@@ -358,9 +371,17 @@ quality
 
    uN0_t uN0[50];
 
+   // Assume the worst (many similar duplicates).
+   const double worst_case_mu = 0.02;
+   const size_t worst_case_N0 = 64000;
+
    int tot = 0;
    for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
       uN0[tot] = estimate_uN0(aln.refseq + s, idx);
+      // Case that estimation failed (e.g., because of "N").
+      if (uN0[tot].u != uN0[tot].u) {
+         uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0 };
+      }
    }
 
    // Find min/max N0.
@@ -394,11 +415,13 @@ quality
          // probability that we are looking for is the probability
          // that N0 is really equal to 1, times the probability that
          // MEM seeding is off target.
-         // If there is a duplicate, it will be detected if there
-         // is a 10 bp window without difference. Since u = 0.06,
-         // each of those windows contains a difference with
-         // probability 0.461.
-         double pmiss = pow(.461, slen/5);
+         //
+         // Since u = 0.06, each 10-bp window contains a difference
+         // with probability 0.461. If there is a difference in the
+         // central window of each 30 bp segment used for the
+         // estimation, the duplicate will not be discovered.
+         double pdiff = pow(.461, tot);
+         double pmiss = 0.2 * pdiff / (0.8 + 0.2 * pdiff); // Bayes formula.
          poff *= pmiss;
       }
 
@@ -513,10 +536,25 @@ batchmap
       // Remove newline character if present.
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
 
+      // If fasta header, print sequence name.
+
+// XXX BENCHMARK STUFF XXX //
+#ifdef FASTOUT
+      if (seq[0] == '>') {
+         fprintf(stdout, ">%s\n", seq+1);
+         continue;
+      }
+#else
+      if (seq[0] == '>') {
+         fprintf(stdout, "%s\t", seq+1);
+         continue;
+      }
+#endif
+
       if (rlen > maxlen) {
          maxlen = rlen;
          // (Re)initialize library.
-         sesame_set_static_params(GAMMA, rlen, .01);
+         sesame_set_static_params(GAMMA, rlen, PROB);
       }
 
       int skip_or_mem = 5;
@@ -534,13 +572,17 @@ batchmap
 
       aln_t aln = alnstack->aln[counter++ % alnstack->pos];
 
+
       char * apos = chr_string(aln.refpos, idx.chr);
-#ifdef DEBUG
-      fprintf(stderr, "%s\n", seq);
-#endif
+
+// XXX BENCHMARK STUFF XXX //
+#ifdef NOQUAL
+      const double prob = 1.0;
+#else
       double prob = alnstack->pos > 1 ?
                         1.0 - 1.0 / alnstack->pos :
                         quality(aln, seq, idx);
+#endif
       fprintf(stdout, "%s\t%s\t%e\n", seq, apos, prob);
 
       free(apos);
@@ -580,6 +622,14 @@ int main(int argc, char ** argv) {
       if (argc < 4) {
          fprintf(stderr, "Specify index and read file.\n");
          exit(EXIT_FAILURE);
+      }
+      // Argument 5 is sequencing error.
+      if (argc == 5) {
+         PROB = strtod(argv[4], NULL);
+         if (PROB <= 0 || PROB >= 1) {
+            fprintf(stderr, "Sequencing error must be in (0,1).\n");
+            exit(EXIT_FAILURE);
+         }
       }
       batchmap(argv[2], argv[3]);
    }
