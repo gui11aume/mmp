@@ -6,9 +6,11 @@ typedef struct seedchain_t seedchain_t;
 typedef struct align_t     align_t;
 typedef struct aligncd_t   aligncd_t;
 
-#define MEM_MAX_LOCI 1000
+#define MAX_MEM_SEED_LOCI 1000
+#define MAX_SKIP_SEED_LOCI 1000000
 #define MAX_MINSCORE_REPEATS 2
 #define MAX_ALIGN_MISMATCHES 30
+#define MAX_CHAIN_INSERT_RATE 1.2
 
 #ifdef DEBUG
 int DEBUG_VERBOSE = 1;
@@ -66,6 +68,17 @@ int           minscore_then_span (const void * a, const void * b) {
       return -1;
    else
       return (*(seedchain_t **)a)->span < (*(seedchain_t **)b)->span;
+};
+
+int           align_minscore_then_span (const void * a, const void * b) {
+   int sa = ((align_t *)a)->minscore;
+   int sb = ((align_t *)b)->minscore;
+   if (sa > sb)
+      return 1;
+   else if (sa < sb)
+      return -1;
+   else
+      return ((align_t *)a)->span < ((align_t *)b)->span;
 };
 
 // Error-handling macros.
@@ -277,6 +290,132 @@ chain_mems
    return chain_stack;
 }
 
+aligncd_t
+chain_skip
+(
+ size_t    slen,
+ int       gamma,
+ int       skip,    
+ stack_t * seeds,
+ index_t   idx
+)
+{
+   // Get all Suffix Arrays.
+   size_t nloc = 0;
+   for (size_t i = 0; i < seeds->pos; i++) {
+      seed_t * seed = (seed_t *)seeds->ptr[i];
+      size_t seed_loc = seed->range.top - seed->range.bot + 1;
+      if (seed_loc <= MAX_SKIP_SEED_LOCI)
+	 nloc += seed_loc;
+      else {
+	 // Remove that seed
+	 seeds->ptr[i--] = seeds->ptr[--seeds->pos];
+      }
+   }
+
+   if (nloc == 0)
+      return (aligncd_t){0, NULL};
+
+   // Seed mask vector.
+   int * gap_mask = malloc(slen*sizeof(int));
+   exit_on_memory_error(gap_mask);
+   for (size_t p = 0; p < slen; p++) {
+      gap_mask[p] = 1;
+   }
+   for (size_t i = 0; i < seeds->pos; i++) {
+      seed_t * seed = (seed_t *)seeds->ptr[i];
+      for (int p = seed->beg; p <= seed->end; p++)
+	 gap_mask[p] = 0;
+   }
+
+   // Allocate all suffix array positions
+   align_t * loc_list = malloc(nloc*sizeof(align_t));
+   exit_on_memory_error(loc_list);
+
+   // Make chained alignment candidates from seed genomic positions
+   size_t j = 0;
+   for (size_t i = 0; i < seeds->pos; i++) {
+      seed_t * seed = (seed_t *)seeds->ptr[i];
+      // Get genomic positions
+      seed->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, seed->range);
+      for (int k = 0; k < seed->range.top - seed->range.bot + 1; k++) {
+	 loc_list[j++] = (align_t){seed->sa[k], seed->beg, 1, seed};
+      }
+   }
+
+   // Sort loci 
+   qsort(loc_list, j, sizeof(align_t), seed_by_refpos);
+
+   // Seed gap for extra mismatches.
+   int mismatch_gap = (gamma/skip + gamma%skip > 0)*skip;
+   
+   // Chain/merge alignments
+   size_t nchain = 0;
+   int * chain_coverage = calloc(slen,sizeof(int));
+   exit_on_memory_error(chain_coverage);
+
+   // First chain
+   for (int p = loc_list[0].seed->beg; p <= loc_list[0].seed->end; p++)
+      chain_coverage[p] = 1;
+
+   for (size_t n = 0; n < nloc; n++) {
+      // Skip consumed seeds
+      if (loc_list[n].minscore == -1)
+	 continue;
+
+      // Reset chain coverage
+      memset(chain_coverage, 0, slen*sizeof(int));
+      for (int p = loc_list[n].seed->beg; p <= loc_list[n].seed->end; p++)
+	 chain_coverage[p] = 1;
+
+      // Find chain
+      for (size_t j = n+1; j < nloc; j++) {
+	 if (loc_list[n].seed == loc_list[j].seed)
+	    continue;
+
+	 // Compute distance between seeds
+	 int max_dist = (loc_list[j].span - loc_list[n].span)*MAX_CHAIN_INSERT_RATE;
+	 int gen_dist = (loc_list[j].refpos - loc_list[n].refpos);
+	 if (gen_dist > max_dist)
+	    break;
+
+	 // Append seed to chain
+	 for (int p = loc_list[j].seed->beg; p <= loc_list[j].seed->end; p++)
+	    chain_coverage[p] = 1;
+
+	 // Mark seed as consumed
+	 loc_list[j].minscore = -1;	 
+      }
+
+      // Chain minimum score
+      int span = 0;
+      int gap = 0;
+      int minscore = 0;
+      for (size_t p = 0; p < slen; p++) {
+	 if (chain_coverage[p] + gap_mask[p]) {
+	    minscore += gap > 0 + gap/mismatch_gap;
+	    gap = 0;
+	 } else {
+	    gap++;
+	 }
+	 span += chain_coverage[p];
+      }
+      minscore += gap > 0 + gap/mismatch_gap;
+      
+      // Create alignment
+      loc_list[nchain++] = (align_t){loc_list[n].refpos, span, minscore, loc_list[n].seed};
+   }
+
+   loc_list = realloc(loc_list, nchain*sizeof(align_t));
+   exit_on_memory_error(loc_list);
+
+   // Sort by minscore then span.
+   qsort(loc_list, nchain, sizeof(align_t), align_minscore_then_span);
+   
+   return (aligncd_t){nchain, loc_list};
+   
+}
+
 stack_t *
 mem_seeds
 (
@@ -385,19 +524,103 @@ mem_seeds
       fprintf(stdout,"\n");
    }
 
-   // Filter repeats > MEM_MAX_LOCI.
+   // Filter repeats > MAX_MEM_SEED_LOCI.
    for (size_t i = 0; i < mems->pos; i++) {
       seed_t * m = (seed_t *) mems->ptr[i];
       size_t  mem_loci = m->range.top - m->range.bot + 1;
-      if (mem_loci > MEM_MAX_LOCI) {
-	 m->range.top = m->range.bot + MEM_MAX_LOCI - 1;
+      if (mem_loci > MAX_MEM_SEED_LOCI) {
+	 m->range.top = m->range.bot + MAX_MEM_SEED_LOCI - 1;
 	 if (DEBUG_VERBOSE)
-	    fprintf(stdout, "[MEM %ld] too many loci (%ld > MEM_MAX_LOCI(%d))\n", i, mem_loci, MEM_MAX_LOCI);
+	    fprintf(stdout, "[MEM %ld] too many loci (%ld > MAX_MEM_SEED_LOCI(%d))\n", i, mem_loci, MAX_MEM_SEED_LOCI);
       }
    }
 
    return mems;
    
+}
+
+stack_t *
+skip_seeds
+(
+ const char    * seq,
+ const index_t   idx,
+ const size_t    gamma,
+ const size_t    skip
+)
+{
+   int len = strlen(seq);
+   int end = len-1;
+   while (end > 0 && NONALPHABET[(uint8_t)seq[end]]) end--;
+   
+   if (end == 0)
+      return stack_new(1);
+
+   // Initialize mem stack
+   stack_t * seeds = stack_new(32);
+
+   // Allocate range variables
+   range_t range = {0};
+
+   // Iterate over all read positions
+   while (end >= gamma - 1) {
+      seed_t seed = {0};
+      seed.end = end;
+
+      // Backward <<<
+      range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+      int mpos = end, mlen = 0;
+
+      // Query the beginning of the read in lookup table.
+      if (end >= LUTK - 1) {
+         size_t merid = 0;
+         for ( ; mlen < LUTK ; mlen++, mpos--) {
+	    if (NONALPHABET[(uint8_t) seq[end-mlen]]) {
+	       range.bot = 1;
+	       range.top = 0;
+	       break;
+	    }
+            uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
+            merid = c + (merid << 2);
+         }
+         range = idx.lut->kmer[merid];
+      }
+
+      // Cancel if we went too far already.
+      if (range.top < range.bot) {
+	 range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+	 mpos = end; mlen = 0;
+      }
+
+      for ( ; mlen < gamma ; mpos--, mlen++) {
+	 if (NONALPHABET[(uint8_t)seq[mpos]]) {
+	    end = mpos - 1;
+	    break;
+	 }
+	 int c = ENCODE[(uint8_t) seq[mpos]];
+	 range.bot = get_rank(idx.occ, c, range.bot - 1);
+	 range.top = get_rank(idx.occ, c, range.top) - 1;
+	 // Stop if no hits.
+	 if (range.top < range.bot) {
+	    end -= skip;
+	    break;
+	 }
+      }
+
+      if (mlen == gamma) {
+	 // Update seed info
+	 seed.beg = seed.end - gamma + 1;
+	 seed.range = range;
+	 // Push seed to stack
+	 seed_t * m = malloc(sizeof(seed_t));
+	 exit_on_memory_error(m);
+	 memcpy(m, &seed, sizeof(seed_t));
+	 push(m, &seeds);
+	 // Update end position
+	 end -= skip;
+      }
+   }
+
+   return seeds;
 }
 
 aligncd_t
@@ -552,15 +775,15 @@ mapread
  const index_t   idx,
  const char    * genome,
  const size_t    gamma,
- const int       spaced
+ const int       skip
  )
 {
    size_t slen = strlen(seq);
 
    // Get seeds
-   stack_t * seeds;
-   if (spaced) {
-      //stack_t * seeds = spaced_seeds(seq, idx, gamma, spaced);
+   stack_t * seeds = NULL;
+   if (skip) {
+      seeds = skip_seeds(seq, idx, gamma, skip);
    } else {
       seeds = mem_seeds(seq, idx, gamma);
    }
@@ -573,10 +796,32 @@ mapread
    // Chain and align seeds
    int best_score = min(slen, MAX_ALIGN_MISMATCHES);
    alnstack_t * best = alnstack_new(10);
-   
-   if (spaced) {
-      //stack_t * chain_stack = chain_spaced(slen, gamma, seeds);
-      
+
+   if (skip) {
+      aligncd_t alignments = chain_skip(slen, gamma, skip, seeds, idx);
+      for (size_t j = 0; j < alignments.cnt; j++) {
+	 align_t alignment = alignments.align[j];
+	 // Do not align chained alncd.
+	 if (alignment.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
+	    break;
+
+	 // Check genome limits.
+	 if (alignment.seed->beg > alignment.refpos || alignment.refpos + slen - alignment.seed->beg >= idx.occ->txtlen) {
+	    if (DEBUG_VERBOSE) {
+	       char * strpos  = chr_string(alignment.refpos, idx.chr);
+	       fprintf(stdout, "alignment out of genome bounds: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, alignment.minscore);
+	    }
+	    continue;
+	 }
+	    
+	 if (DEBUG_VERBOSE) {
+	    char * strpos  = chr_string(alignment.refpos, idx.chr);
+	    fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, alignment.minscore);
+	    free(strpos);
+	 }
+	 
+	 align(alignment, seq, genome, &best_score, &best);
+      }
    } else {
       stack_t * chain_stack = chain_mems(slen, seeds);
       for (size_t i = 0; i < chain_stack->pos; i++) {
