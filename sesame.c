@@ -102,10 +102,11 @@ typedef struct rec_t        rec_t;         // Hash table records.
 typedef struct trunc_pol_t  trunc_pol_t;   // Truncated polynomials.
 
 struct rec_t {
-	double    u;      // Divergence rate.
-	size_t    N;      // Number of duplicates (log2).
-	double  * prob;   // False positive probabilities.
-   rec_t   * next;   // Next record if any.
+   int      n;      // Skipping.
+	double   u;      // Divergence rate.
+	int      N;      // Number of duplicates (log2).
+	double * prob;   // False positive probabilities.
+   rec_t  * next;   // Next record if any.
 };
 
 struct matrix_t {
@@ -498,8 +499,9 @@ rec_t *
 lookup
 (
           rec_t  ** hash,
+    const int       n,
     const double    u,
-    const size_t    N
+    const int       N
 )
 // SYNOPSIS:
 //   Look for the entry of the hash associated with the key (N,u).
@@ -511,10 +513,10 @@ lookup
 {
 
    size_t coarse_u = (100 * u);
-   size_t addr = (37*N + coarse_u) % HSIZE;
+   size_t addr = (739*n + 37*N + coarse_u) % HSIZE;
    
    for (rec_t *rec = hash[addr] ; rec != NULL ; rec = rec->next) {
-      if (rec->u == coarse_u && rec->N == N) return rec;
+      if (rec->n == n && rec->u == coarse_u && rec->N == N) return rec;
    }
 
    // Entry not found.
@@ -526,9 +528,10 @@ lookup
 rec_t *
 insert
 (
-          rec_t   ** hash,
-    const double     u,
-    const size_t     N,
+          rec_t  ** hash,
+    const int       n,
+    const double    u,
+    const int       N,
           double  *  prob
 )
 // SYNOPSIS:
@@ -545,11 +548,12 @@ insert
 
    // See note 4.4.3.2.
    size_t coarse_u = (100 * u);
-   size_t addr = (37*N + coarse_u) % HSIZE;
+   size_t addr = (739*n + 37*N + coarse_u) % HSIZE;
 
    rec_t *new = malloc(sizeof(rec_t));
    handle_memory_error(new);
 
+   new->n = n;
    new->u = coarse_u;
    new->N = N;
    new->prob = prob;
@@ -568,8 +572,9 @@ in_case_of_failure:
 double *
 fetch_prob   // VISIBLE // 
 (
-    const double     u,
-    const size_t     N
+    const int    n,
+    const double u,
+    const int    N
 )
 // SYNOPSIS:
 //   Look for the entry of the hash associated with the key (N,u).
@@ -580,7 +585,7 @@ fetch_prob   // VISIBLE //
 //   coarse-grained variants) if present, or NULL otherwise.
 {
 
-   rec_t *record = lookup(Y1, u, N);
+   rec_t *record = lookup(Y1, n, u, N);
    return record == NULL ? NULL : record->prob;
 
 }
@@ -590,9 +595,10 @@ fetch_prob   // VISIBLE //
 int
 store_prob   // VISIBLE // 
 (
-    const double     u,
-    const size_t     N,
-          double  *  prob
+    const int      n,
+    const double   u,
+    const int      N,
+          double * prob
 )
 // SYNOPSIS:
 //   Create an entry in the hash associated with the key
@@ -606,7 +612,7 @@ store_prob   // VISIBLE //
 //   Fails if 'insert()' fails.
 {
 
-   rec_t *record = insert(Y1, u, N, prob);
+   rec_t *record = insert(Y1, n, u, N, prob);
    return record == NULL ? FAILURE : SUCCESS;
 
 }
@@ -858,10 +864,10 @@ new_trunc_pol_B
 
    if (N == 0) {
       // Zero if i is not 1.
-      if (i != 1)
-         return new;
-         new->monodeg = 1;
-         new->coeff[1] = 1-P;
+      if (i != 1) return new;
+      // Monomial of degree 1 otherwise.
+      new->monodeg = 1;
+      new->coeff[1] = 1-P;
       return new;
    }
 
@@ -2458,7 +2464,7 @@ rpos
 void
 one_mcmc_mem
 (
-   const size_t   N,
+   const int      N,
          double * pos
 )
 // SYNOPSIS:
@@ -3175,13 +3181,13 @@ auto_exact_seed_nullp   // VISIBLE //
    size_t sqN = squish(N);
 
    // Retrieve probabilities from H1N.
-   rec_t *record = lookup(H1N, u, sqN);
+   rec_t *record = lookup(H1N, 0, u, sqN);
 
    // Otherwise compute them.
    if (record == NULL) {
       prob = exact_seed_nullp(u, sqN);
       // Insert in H1N.
-      record = insert(H1N, u, sqN, prob);
+      record = insert(H1N, 0, u, sqN, prob);
       if (record == NULL) {
          goto in_case_of_failure;
       }
@@ -3228,13 +3234,13 @@ auto_exact_seed_offp   // VISIBLE //
    size_t sqN = squish(N);
 
    // Retrieve probabilities from H1O.
-   rec_t *record = lookup(H1O, u, sqN);
+   rec_t *record = lookup(H1O, 0, u, sqN);
 
    // Otherwise compute them.
    if (record == NULL) {
       prob = exact_seed_offp(u, sqN);
       // Insert in H1O.
-      record = insert(H1O, u, sqN, prob);
+      record = insert(H1O, 0, u, sqN, prob);
       if (record == NULL) {
          goto in_case_of_failure;
       }
@@ -3288,13 +3294,13 @@ auto_skip_seed_nullp   // VISIBLE //
    size_t sqN = squish(N);
 
    // Retrieve probabilities from H2N.
-   rec_t *record = lookup(H2N, u, sqN);
+   rec_t *record = lookup(H2N, n, u, sqN);
 
    // Otherwise compute them.
    if (record == NULL) {
       prob = skip_seed_nullp(n, u, sqN);
       // Insert in H2N.
-      record = insert(H2N, u, sqN, prob);
+      record = insert(H2N, n, u, sqN, prob);
       if (record == NULL) {
          goto in_case_of_failure;
       }
@@ -3348,13 +3354,13 @@ auto_skip_seed_offp   // VISIBLE //
    size_t sqN = squish(N);
 
    // Retrieve probabilities from H2O.
-   rec_t *record = lookup(H2O, u, sqN);
+   rec_t *record = lookup(H2O, n, u, sqN);
 
    // Otherwise compute them.
    if (record == NULL) {
       prob = skip_seed_offp(n, u, sqN);
       // Insert in H2O.
-      record = insert(H2O, u, sqN, prob);
+      record = insert(H2O, n, u, sqN, prob);
       if (record == NULL) {
          goto in_case_of_failure;
       }
@@ -3401,13 +3407,13 @@ auto_mem_seed_nullp   // VISIBLE //
    size_t sqN = squish(N);
 
    // Retrieve probabilities from H3N.
-   rec_t *record = lookup(H3N, u, sqN);
+   rec_t *record = lookup(H3N, 0, u, sqN);
 
    // Otherwise compute them.
    if (record == NULL) {
       prob = mem_seed_nullp(u, sqN);
       // Insert in H3N.
-      record = insert(H3N, u, sqN, prob);
+      record = insert(H3N, 0, u, sqN, prob);
       if (record == NULL) {
          goto in_case_of_failure;
       }
@@ -3455,7 +3461,7 @@ auto_mem_seed_offp   // VISIBLE //
    size_t sqN = squish(N);
 
    // Retrieve probabilities from H3O.
-   rec_t *record = lookup(H3O, u, sqN);
+   rec_t *record = lookup(H3O, 0, u, sqN);
 
    // Otherwise compute them.
    if (record == NULL) {
@@ -3468,7 +3474,7 @@ auto_mem_seed_offp   // VISIBLE //
       }
 
       // Insert in H3O.
-      record = insert(H3O, u, sqN, prob);
+      record = insert(H3O, 0, u, sqN, prob);
       if (record == NULL) {
          goto in_case_of_failure;
       }
@@ -3500,7 +3506,7 @@ dump_prob_to_file   // VISIBLE //
    // Iterate over the values of the hash table.
    for (int i = 0 ; i < HSIZE ; i++) {
       for (rec_t *rec = Y1[i] ; rec != NULL ; rec = rec->next) {
-         fprintf(f, "%.2f\t%ld", rec->u / 100.0, rec->N);
+         fprintf(f, "%d\t%.2f\t%d", rec->n, rec->u / 100.0, rec->N);
          for (int j = 0 ; j <= K ; j++) {
             fprintf(f, "\t%.8f", rec->prob[j]);
          }
@@ -3545,6 +3551,7 @@ load_prob_from_file   // VISIBLE //
 
    while((s = fgets(line, 4096, f)) != NULL) {
 
+      int n = -1;
       double u = -1.;
       int N = -1;
       double *prob = malloc((K+1) * sizeof(double));
@@ -3553,19 +3560,20 @@ load_prob_from_file   // VISIBLE //
       int counter = 0;
       char *token = strtok(line, "\t");
       while (token != NULL) {
-         if      (counter == 0) u = strtod(token, NULL);
-         else if (counter == 1) N = strtoul(token, NULL, 10);
-         else                   prob[counter-2] = strtod(token, NULL);
+         if      (counter == 0) n = strtol(token, NULL, 10);
+         else if (counter == 1) u = strtod(token, NULL);
+         else if (counter == 2) N = strtol(token, NULL, 10);
+         else                   prob[counter-3] = strtod(token, NULL);
          counter++;
          token = strtok(NULL, "\t");
       }
 
-      if (counter != K+3) {
+      if (counter != K+4) {
          warning("could not parse input file", __func__, __LINE__);
          goto in_case_of_failure;
       }
 
-      if (!store_prob(u, N, prob)) {
+      if (!store_prob(n, u, N, prob)) {
          warning("memory error", __func__, __LINE__);
          goto in_case_of_failure;
       }
