@@ -764,7 +764,7 @@ align
 
    // Bug control on skip seeds
    if (score < alignment.minscore) {
-      fprintf(stderr, "THIS IS FUCKING INSANE, score (%d) < minscore (%d), alignment: %s\n", score, alignment.minscore, seq);
+      fprintf(stderr, "bug found: score (%d) < minscore (%d), alignment: %s\n", score, alignment.minscore, seq);
       exit(1);
    }
 }
