@@ -6,11 +6,11 @@ typedef struct seedchain_t seedchain_t;
 typedef struct align_t     align_t;
 typedef struct aligncd_t   aligncd_t;
 
-#define MAX_MEM_SEED_LOCI 1000
-#define MAX_SKIP_SEED_LOCI 1000000
+#define MAX_MEM_SEED_LOCI 300
+#define MAX_SKIP_CHAIN_SEEDS 10000
 #define MAX_MINSCORE_REPEATS 2
 #define MAX_ALIGN_MISMATCHES 30
-#define MAX_CHAIN_INSERT_RATE 1.2
+#define MAX_CHAIN_INDEL_RATE 0.1
 
 #ifdef DEBUG
 int DEBUG_VERBOSE = 1;
@@ -305,28 +305,13 @@ chain_skip
    for (size_t i = 0; i < seeds->pos; i++) {
       seed_t * seed = (seed_t *)seeds->ptr[i];
       size_t seed_loc = seed->range.top - seed->range.bot + 1;
-      if (seed_loc <= MAX_SKIP_SEED_LOCI)
-	 nloc += seed_loc;
-      else {
-	 // Remove that seed
-	 seeds->ptr[i--] = seeds->ptr[--seeds->pos];
-      }
+      if (seed_loc > MAX_SKIP_CHAIN_SEEDS)
+	 return (aligncd_t){0, NULL};
+      nloc += seed_loc;
    }
 
    if (nloc == 0)
       return (aligncd_t){0, NULL};
-
-   // Seed mask vector.
-   int * gap_mask = malloc(slen*sizeof(int));
-   exit_on_memory_error(gap_mask);
-   for (size_t p = 0; p < slen; p++) {
-      gap_mask[p] = 1;
-   }
-   for (size_t i = 0; i < seeds->pos; i++) {
-      seed_t * seed = (seed_t *)seeds->ptr[i];
-      for (int p = seed->beg; p <= seed->end; p++)
-	 gap_mask[p] = 0;
-   }
 
    // Allocate all suffix array positions
    align_t * loc_list = malloc(nloc*sizeof(align_t));
@@ -347,37 +332,45 @@ chain_skip
    qsort(loc_list, j, sizeof(align_t), seed_by_refpos);
 
    // Seed gap for extra mismatches.
-   int mismatch_gap = (gamma/skip + gamma%skip > 0)*skip;
+   int mismatch_gap = gamma + (gamma/skip + gamma%skip > 0)*skip;
+   int max_indels = slen*(MAX_CHAIN_INDEL_RATE);
    
    // Chain/merge alignments
    size_t nchain = 0;
    int * chain_coverage = calloc(slen,sizeof(int));
    exit_on_memory_error(chain_coverage);
 
-   // First chain
-   for (int p = loc_list[0].seed->beg; p <= loc_list[0].seed->end; p++)
-      chain_coverage[p] = 1;
-
    for (size_t n = 0; n < nloc; n++) {
       // Skip consumed seeds
       if (loc_list[n].minscore == -1)
 	 continue;
 
-      // Reset chain coverage
+      // Flag coverage
       memset(chain_coverage, 0, slen*sizeof(int));
       for (int p = loc_list[n].seed->beg; p <= loc_list[n].seed->end; p++)
 	 chain_coverage[p] = 1;
 
+      int max_ref_dist = (slen - loc_list[n].span - gamma + 1 + max_indels);
+
       // Find chain
       for (size_t j = n+1; j < nloc; j++) {
-	 if (loc_list[n].seed == loc_list[j].seed)
+	 int gen_dist = ((ssize_t)loc_list[j].refpos - (ssize_t)loc_list[n].refpos);
+
+	 // No more possible chaining
+	 if (gen_dist > max_ref_dist)
+	    break;
+
+	 // Seed mislocation
+	 if (loc_list[n].span >= loc_list[j].span)
 	    continue;
 
 	 // Compute distance between seeds
-	 int max_dist = (loc_list[j].span - loc_list[n].span)*MAX_CHAIN_INSERT_RATE;
-	 int gen_dist = (loc_list[j].refpos - loc_list[n].refpos);
-	 if (gen_dist > max_dist)
-	    break;
+	 int read_dist = (ssize_t)loc_list[j].span - (ssize_t)loc_list[n].span;
+
+
+	 // Chain gap too big
+	 if (gen_dist > read_dist + max_indels || gen_dist < read_dist - max_indels)
+	    continue;
 
 	 // Append seed to chain
 	 for (int p = loc_list[j].seed->beg; p <= loc_list[j].seed->end; p++)
@@ -392,8 +385,8 @@ chain_skip
       int gap = 0;
       int minscore = 0;
       for (size_t p = 0; p < slen; p++) {
-	 if (chain_coverage[p] + gap_mask[p]) {
-	    minscore += gap > 0 + gap/mismatch_gap;
+	 if (chain_coverage[p] && !gap) {
+	    minscore += (gap + mismatch_gap - 1)/mismatch_gap; // int version of ceil(gap/mismatch_gap)
 	    gap = 0;
 	 } else {
 	    gap++;
@@ -617,6 +610,8 @@ skip_seeds
 	 push(m, &seeds);
 	 // Update end position
 	 end -= skip;
+	 if (end < gamma - 1 && end > gamma - 1 - skip)
+	    end = gamma - 1;
       }
    }
 
@@ -766,6 +761,12 @@ align
 	 aln_push(aln, best);
       }
    }
+
+   // Bug control on skip seeds
+   if (score < alignment.minscore) {
+      fprintf(stderr, "THIS IS FUCKING INSANE, score (%d) < minscore (%d), alignment: %s\n", score, alignment.minscore, seq);
+      exit(1);
+   }
 }
 
 alnstack_t *
@@ -779,6 +780,10 @@ mapread
  )
 {
    size_t slen = strlen(seq);
+
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout, "\n[READ] sequence: %s\n",seq);
+   }
 
    // Get seeds
    stack_t * seeds = NULL;
@@ -802,8 +807,11 @@ mapread
       for (size_t j = 0; j < alignments.cnt; j++) {
 	 align_t alignment = alignments.align[j];
 	 // Do not align chained alncd.
-	 if (alignment.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
+	 if (alignment.minscore > best_score || (alignment.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
+	    if (DEBUG_VERBOSE)
+	       fprintf(stdout, "no more interesting candidates. skipping alignments.\n");
 	    break;
+	 }
 
 	 // Check genome limits.
 	 if (alignment.seed->beg > alignment.refpos || alignment.refpos + slen - alignment.seed->beg >= idx.occ->txtlen) {
@@ -834,8 +842,11 @@ mapread
 	 for (int j = 0; j < alignments.cnt; j++) {
 	    align_t alignment = alignments.align[j];
 	    // Do not align chained alncd.
-	    if (!alignment.span || (mem_chain->minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS))
+	    if (!alignment.span || (alignment.minscore > best_score || (alignment.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS))) {
+	       if (DEBUG_VERBOSE)
+		  fprintf(stdout, "no more interesting candidates. skipping alignments.\n");
 	       break;
+	    }
 
 	    // Check genome limits.
 	    if (alignment.seed->beg > alignment.refpos || alignment.refpos + slen - alignment.seed->beg >= idx.occ->txtlen) {
