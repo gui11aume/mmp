@@ -32,8 +32,8 @@ double * skip_seed_offp (int, double, int);
 
 
 // Memoization, hashing, storing, loading.
-double * fetch_prob (double, size_t);
-int store_prob (double, size_t, double *);
+double * fetch_prob (int, double, int);
+int store_prob (int, double, int, double *);
 void dump_prob_to_file (FILE *);
 void load_prob_from_file (FILE *);
 void clean_prob_storage (void);
