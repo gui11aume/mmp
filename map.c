@@ -835,16 +835,19 @@ mapread
       for (size_t i = 0; i < chain_stack->pos; i++) {
 	 // 
 	 seedchain_t * mem_chain  = (seedchain_t *) chain_stack->ptr[i];
-	 if (mem_chain->minscore > best_score)
+	 if (mem_chain->minscore > best_score || (mem_chain->minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
+	    if (DEBUG_VERBOSE)
+	       fprintf(stdout, "no more interesting candidate chains. skipping alignments.\n");
 	    break;
+	 }
 	 // 
 	 aligncd_t alignments = mem_alignments(mem_chain, idx, slen);
 	 for (int j = 0; j < alignments.cnt; j++) {
 	    align_t alignment = alignments.align[j];
 	    // Do not align chained alncd.
-	    if (!alignment.span || (alignment.minscore > best_score || (alignment.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS))) {
+	    if (!alignment.span || (mem_chain->minscore >= best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
 	       if (DEBUG_VERBOSE)
-		  fprintf(stdout, "no more interesting candidates. skipping alignments.\n");
+		  fprintf(stdout, "no more interesting alignments in this chain. skipping chain.\n");
 	       break;
 	    }
 
