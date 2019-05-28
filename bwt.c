@@ -189,68 +189,84 @@ create_bwt
 
 }
 
-
-void
-write_occ_blocks
-(
- occ_t    * occ,
- uint32_t * smpl,
- uint32_t * bits,
- size_t     idx    // Index of 'blocc_t' in array.
- )
-// Write 'SIGMA' smpl/bits blocks to the 'blocc_t' arrays of 'Occ'
-// at position 'pos' (the array index and not the position in
-// the bwt).
-{
-   for (int i = 0 ; i < SIGMA ; i++) {
-      occ->rows[i * occ->nrows + idx].smpl = smpl[i];
-      occ->rows[i * occ->nrows + idx].bits = bits[i];
-   }
-}
-
-
 occ_t *
 create_occ
 (
- const bwt_t * bwt
+ const bwt_t * bwt,
+ const int     mark_intv
  )
 {
+   // Define structure parameters.
+   uint64_t word_size = 64;
+   uint64_t mark_bits = mark_intv * word_size;
 
    // Allocate new 'Occ_t'.
-   const size_t txtlen = bwt->txtlen;
-   const size_t nrows = (txtlen + (32-1)) / 32;
-   const size_t extra = SIGMA * nrows * sizeof(blocc_t);
+   const uint64_t txtlen = bwt->txtlen;
+   const uint64_t nintv = (txtlen + mark_bits - 1) / mark_bits;
+   const uint64_t nword = nintv * mark_intv;
+   const uint64_t nmark = nintv + 1;
+   const size_t occ_size = (nword+nmark)*SIGMA*sizeof(uint64_t);
 
-   occ_t * occ = malloc(sizeof(occ_t) + extra);
+   occ_t * occ = malloc(sizeof(occ_t)+occ_size);
    exit_on_memory_error(occ);
 
+   // Fill occ struct
    occ->txtlen = txtlen;
-   occ->nrows = nrows;
+   occ->occ_mark_intv = mark_intv;
+   occ->occ_word_size = word_size;
+   occ->occ_mark_bits = mark_bits;
+   
+   uint64_t occ_tmp[SIGMA] = {0};
+   uint64_t occ_abs[SIGMA] = {0};
 
-   uint32_t smpl[SIGMA] = {0};
-   uint32_t diff[SIGMA] = {0};
-   uint32_t bits[SIGMA] = {0};
+   uint64_t word = 0, interval = 0;
+   
+   // Write first marker (all 0).
+   for (int i = 0; i < SIGMA; i++)
+      occ->occ[word++] = 0;
 
    for (size_t pos = 0 ; pos < bwt->txtlen ; pos++) {
       // Extract symbol at position 'i' from bwt.
       uint8_t c = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
       if (pos != bwt->zero) {   // (Skip the '$' symbol).
-         diff[c]++;
-         bits[c] |= (1 << (31 - pos % 32));
+         occ_abs[c]++;
+         occ_tmp[c] |= ((uint64_t)1) << (word_size - 1 - (pos % word_size));
       }
-      if (pos % 32 == 31) {     // Write every 32 entries.
-         write_occ_blocks(occ, smpl, bits, pos/32);
-         memcpy(smpl, diff, SIGMA * sizeof(uint32_t));
-         bzero(bits, sizeof(bits));
+      if (pos % word_size == word_size - 1) {
+         for (int j = 0; j < SIGMA; j++) {
+            occ->occ[word++] = occ_tmp[j];
+            occ_tmp[j] = 0;
+         }
+         interval++;
+         // Write Mark.
+         if (interval == mark_intv) {
+            for (int j = 0; j < SIGMA; j++) occ->occ[word++] = occ_abs[j];
+            interval = 0;
+         }
       }
    }
 
-   write_occ_blocks(occ, smpl, bits, (bwt->txtlen-1)/32);
+   // Last incomplete interval.
+   if (bwt->txtlen % word_size) {
+      interval++;
+      for (int j = 0; j < SIGMA; j++)
+         occ->occ[word++] = occ_tmp[j];
+   }
+   if (interval > 0) {
+      // Fill the last interval with 0.
+      for (int i = interval; i < mark_intv; i++)
+         for (int j = 0; j < SIGMA; j++) occ->occ[word++] = 0;
+      // Add mark.
+      for (int j = 0; j < SIGMA; j++) occ->occ[word++] = occ_abs[j];
+   }
 
+   // Occ table length
+   occ->occ_size = word;
+   
    // Write 'C'.
    occ->C[0] = 1;
    for (int i = 1 ; i < SIGMA+1 ; i++) {
-      occ->C[i] = occ->C[i-1] + diff[i-1];
+      occ->C[i] = occ->C[i-1] + occ_abs[i-1];
    }
 
    return occ;
@@ -350,27 +366,50 @@ chr_string
    return str;
 }
 
-
 size_t
 get_rank
 (
- const occ_t   * occ,
- uint8_t   c,
- size_t    pos
- )
+ const occ_t  * occ_ptr,
+ uint8_t  c,
+ size_t   pos_unsigned
+)
 {
-   uint32_t smpl = occ->rows[c*occ->nrows + pos/32].smpl;
-   uint32_t bits = occ->rows[c*occ->nrows + pos/32].bits;
-   // Several options for pop-count have been tested for this
-   // implementation. In the end, I chose '__builtin_popcountl' because
-   // the performance is good and the code is simple.
-   return occ->C[c] + smpl + __builtin_popcountl(bits >> (31 - pos % 32));
-}
+   int64_t pos = (int64_t)pos_unsigned;
+   // Compute word, bit and absolute marker positions.
+   int64_t wrdnum = pos / occ_ptr->occ_word_size;
+   int64_t wrdptr = (wrdnum + wrdnum/occ_ptr->occ_mark_intv + 1) * SIGMA + c;
+   int64_t mrkptr = (((wrdnum + occ_ptr->occ_mark_intv/2)/occ_ptr->occ_mark_intv) * (occ_ptr->occ_mark_intv+1)) * SIGMA + c;
+   int64_t bit    = pos % occ_ptr->occ_word_size;
 
+   uint64_t occ = occ_ptr->occ[mrkptr];
+   if (wrdptr > mrkptr) {
+      int64_t  offset = 0;
+      // Sum bit offsets.
+      for (uint64_t i = mrkptr + SIGMA; i < wrdptr; i+= SIGMA)
+         offset += __builtin_popcountl(occ_ptr->occ[i]);
+      // Sum partial word.
+      offset += __builtin_popcountl(occ_ptr->occ[wrdptr] >> (occ_ptr->occ_word_size - 1 - bit));
+      // Returm sum.
+      occ += offset;
+   } else {
+      int64_t  offset = 0;
+      // Sum partial word.
+      if (bit < occ_ptr->occ_word_size - 1)
+         offset += __builtin_popcountl(occ_ptr->occ[wrdptr] << (bit+1));
+      // Sum bit offsets.
+      for (uint64_t i = wrdptr + SIGMA; i < mrkptr; i+= SIGMA)
+         offset += __builtin_popcountl(occ_ptr->occ[i]);
+      // Return subtraction.
+      occ -= offset;
+   }
+   return (size_t)occ_ptr->C[c] + occ;
+
+}
 
 void
 fill_lut
 (
+
  lut_t   * lut,
  const occ_t   * occ,
  const range_t   range,

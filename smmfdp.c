@@ -10,6 +10,9 @@
 #define GAMMA 17
 #define PROBDEFAULT 0.01
 
+// Index parameters
+#define OCC_INTERVAL_SIZE 14
+
 // ------- Machine-specific code ------- //
 // The 'mmap()' option 'MAP_POPULATE' is available
 // only on Linux and from kern version 2.6.23.
@@ -96,7 +99,7 @@ build_index
    fprintf(stderr, "done.\n");
 
    fprintf(stderr, "creating Occ table... ");
-   occ_t * occ = create_occ(bwt);
+   occ_t * occ = create_occ(bwt, OCC_INTERVAL_SIZE);
    fprintf(stderr, "done.\n");
 
    fprintf(stderr, "filling lookup table... ");
@@ -144,7 +147,7 @@ build_index
    if (focc < 0) exit_cannot_open(buff);
 
    ws = 0;
-   sz = sizeof(occ_t) + occ->nrows * SIGMA * sizeof(blocc_t);
+   sz = sizeof(occ_t) + occ->occ_size*sizeof(uint64_t);
    data = (char *) occ;
    while (ws < sz) ws += write(focc, data + ws, sz - ws);
    close(focc);

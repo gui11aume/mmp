@@ -87,10 +87,13 @@ struct range_t {
 // 'blocc_t' in the arrays, but the size of the bwt, including the
 // termination character.
 struct occ_t {
-   size_t   txtlen;      // 'strlen(txt) + 1'.
-   size_t   C[SIGMA+1];  // The 'C' array.
-   size_t   nrows;       // Number of entries.
-   blocc_t  rows[0];     // Occ entries.
+   size_t      txtlen;
+   uint64_t    occ_size;
+   uint64_t    occ_mark_intv;
+   uint64_t    occ_word_size;
+   uint64_t    occ_mark_bits;
+   uint64_t    C[SIGMA+1];
+   uint64_t    occ[0];
 };
 
 // The compressed suffix array.
@@ -142,7 +145,7 @@ struct stack_t {
 csa_t      * compress_sa(int64_t *);
 int64_t    * compute_sa(const char *);
 bwt_t      * create_bwt(const char *, const int64_t *);
-occ_t      * create_occ(const bwt_t *);
+occ_t      * create_occ(const bwt_t *, const int);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
 char       * normalize_genome(FILE *, char *);
 chr_t      * index_load_chr(const char *);
