@@ -25,10 +25,10 @@ struct seed_t {
 };
 
 struct aln_t {
-         int      score;
-         size_t   refpos;
-   const char   * refseq;
-         seed_t   seed;
+   int      score;
+   size_t   refpos;
+   char   * refseq;
+   seed_t   seed;
 };
 
 struct alnstack_t {
@@ -38,6 +38,6 @@ struct alnstack_t {
 };
 
 
-alnstack_t * mapread (const char *, const index_t, const char *, const size_t, const int);
+alnstack_t * mapread (const char *, const index_t, const size_t, const int);
 
 #endif

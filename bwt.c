@@ -621,13 +621,49 @@ query_csa_range
    return sa_values;
 }
 
+char *
+decompress_genome
+(
+ char * dna,
+ size_t pos,
+ size_t len
+)
+{
+   // Allocate output.
+   char * seq = malloc(len+1);
+   exit_on_memory_error(seq);
+
+   for (size_t i = 0, p = pos; i < len; i++, p++)
+      seq[i] = ALPHABET[(dna[p/4] >> ((p*2)%8)) & 0b11];
+
+   seq[len] = 0;
+   return seq;
+}
+
+char *
+compress_genome
+(
+ char * genome,
+ size_t gsize
+)
+{
+   // Allocate nucleotides.
+   char * dna = calloc(gsize/4+1, 1);
+   exit_on_memory_error(dna);
+
+   for (size_t i = 0; i < gsize; i++)
+      dna[i/4] |= (ENCODE[(int)genome[i]] & 0b11) << ((i*2)%8);
+
+   return dna;
+}
 
 char *
 normalize_genome
 (
  FILE   * inputf,
- char   * chrfile
- )
+ char   * chrfile,
+ size_t * gsize_ptr
+)
 {
 
    // Read variables.
@@ -643,28 +679,21 @@ normalize_genome
    exit_on_memory_error(genome);
 
    // Chromosome file.
-   stack_t * seqnames = NULL;
-   stack_t * seqstart = NULL;
-   
-   if (chrfile) {
-      seqnames = stack_new(64);
-      seqstart = stack_new(64);
-   }
+   stack_t * seqnames = stack_new(64);
+   stack_t * seqstart = stack_new(64);
    
    // Load fasta file line by line and concatenate.
    while ((rlen = getline(&buffer, &sz, inputf)) != -1) {
       if (buffer[0] == '>') {
-         if (chrfile) {
-            buffer[rlen-1] = 0;
-            int k = 0;
-            while (buffer[k] != ' ' && buffer[k] != 0) k++;
-            buffer[k] = 0;
-            char * seqname = strdup(buffer+1);
-            push(seqname, &seqnames);
-            size_t * gpos = malloc(sizeof(size_t));
-            *gpos = gsize+1;
-            push(gpos, &seqstart);
-         }
+	 buffer[rlen-1] = 0;
+	 int k = 0;
+	 while (buffer[k] != ' ' && buffer[k] != 0) k++;
+	 buffer[k] = 0;
+	 char * seqname = strdup(buffer+1);
+	 push(seqname, &seqnames);
+	 size_t * gpos = malloc(sizeof(size_t));
+	 *gpos = gsize+1;
+	 push(gpos, &seqstart);
          continue;
       }
       if (gbufsize < gsize + rlen) {
@@ -678,29 +707,29 @@ normalize_genome
       gsize += rlen - one_if_newline;
    }
 
-   if (chrfile) {
-      int fd = open(chrfile, O_WRONLY | O_CREAT, 0664);
-      ssize_t b;
-      b = write(fd, &gsize, sizeof(size_t));
-      if (b < 1) {
-         fprintf(stderr, "error writing chr index file\n");
-         exit(EXIT_FAILURE);
-      }
-
-      b = write(fd, &(seqnames->pos), sizeof(size_t));
-      for (size_t i = 0; i < seqnames->pos; i++) {
-         b = write(fd, seqstart->ptr[i], sizeof(size_t));
-         char * seqname = (char *) seqnames->ptr[i];
-         size_t slen    = strlen(seqname)+1;
-         b = write(fd, &slen, sizeof(size_t));
-         b = write(fd, seqname, slen);
-         free(seqstart->ptr[i]);
-         free(seqnames->ptr[i]);
-      }
-      free(seqstart);
-      free(seqnames);
-      close(fd);
+   // Write chromosome names
+   int fd = open(chrfile, O_WRONLY | O_CREAT, 0664);
+   ssize_t b;
+   b = write(fd, &gsize, sizeof(size_t));
+   if (b < 1) {
+      fprintf(stderr, "error writing chr index file\n");
+      exit(EXIT_FAILURE);
    }
+
+   b = write(fd, &(seqnames->pos), sizeof(size_t));
+   for (size_t i = 0; i < seqnames->pos; i++) {
+      b = write(fd, seqstart->ptr[i], sizeof(size_t));
+      char * seqname = (char *) seqnames->ptr[i];
+      size_t slen    = strlen(seqname)+1;
+      b = write(fd, &slen, sizeof(size_t));
+      b = write(fd, seqname, slen);
+      free(seqstart->ptr[i]);
+      free(seqnames->ptr[i]);
+   }
+   free(seqstart);
+   free(seqnames);
+   close(fd);
+
 
    // FIXME //
    // Here we assume that if NULL is passed as a second parameter,
@@ -710,19 +739,17 @@ normalize_genome
    // flag to tell whether capitalization should be performed, or change
    // the logic of this part entirely.
   
-   if (chrfile != NULL) {
-      // Normalize (use only capital alphabet letters).
-      for (size_t pos = 0; pos < gsize ; pos++) {
-         int iter = 0;
-         if (NONALPHABET[(uint8_t) genome[pos]]) {
-            // Replace by cycling over (A,C,G,T).
-            genome[pos] = ALPHABET[iter++ % 4];
-         }
-         else {
-            // Use only capital letters (important for
-            // sorting the suffixes in lexicographic order).
-            genome[pos] = toupper(genome[pos]);
-         }
+   // Normalize (use only capital alphabet letters).
+   for (size_t pos = 0; pos < gsize ; pos++) {
+      uint64_t iter = 0;
+      if (NONALPHABET[(uint8_t) genome[pos]]) {
+	 // Replace by cycling over (A,C,G,T).
+	 genome[pos] = ALPHABET[iter++ % 4];
+      }
+      else {
+	 // Use only capital letters (important for
+	 // sorting the suffixes in lexicographic order).
+	 genome[pos] = toupper(genome[pos]);
       }
    }
 
@@ -740,6 +767,9 @@ normalize_genome
 
    // Add the terminator.
    genome[2*div] = '\0';
+
+   // Return genome size.
+   *gsize_ptr = 2*div;
 
    // Clean up.
    free(buffer);

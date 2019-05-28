@@ -701,7 +701,7 @@ align
 (
  align_t       alignment,
  const char  * seq,
- const char  * genome,
+ char        * genome,
  int         * best_score,
  alnstack_t ** best
 )
@@ -712,9 +712,6 @@ align
    if (seed->beg > alignment.refpos)
       return;
 
-   // Get genomic sequence
-   const char * ref = genome + alignment.refpos - seed->beg;
-
    int score;
    if (seed->beg == 0 && seed->end == slen-1) {
       // Do not align perfect seeds.
@@ -723,6 +720,9 @@ align
 	 fprintf(stdout, "skip alignment: perfect seed -> score: 0\n");
 
    } else {
+      // Get genomic sequence
+      char * ref = decompress_genome(genome, alignment.refpos - seed->beg, slen+3);
+
       score = nw(ref,
 		 seq,
 		 slen+3, // Allow 3 nucleotides to allocate insertions.
@@ -741,6 +741,8 @@ align
 		 ref + seed->beg, (int)(slen-seed->end-1), ref + seed->end + 1,
 		 score);
       }
+      
+      free(ref);
    }
    // Check align score.
    if (score <= *best_score) {
@@ -748,7 +750,7 @@ align
       aln_t aln;
       aln.score  = score;
       aln.refpos = alignment.refpos - seed->beg;
-      aln.refseq = ref;
+      aln.refseq = NULL;
       aln.seed   = *seed;
 
       if (score < *best_score) {
@@ -774,7 +776,6 @@ mapread
 (
  const char    * seq,
  const index_t   idx,
- const char    * genome,
  const size_t    gamma,
  const int       skip
  )
@@ -828,7 +829,7 @@ mapread
 	    free(strpos);
 	 }
 	 
-	 align(alignment, seq, genome, &best_score, &best);
+	 align(alignment, seq, idx.dna, &best_score, &best);
       }
    } else {
       stack_t * chain_stack = chain_mems(slen, seeds);
@@ -866,7 +867,7 @@ mapread
 	       free(strpos);
 	    }
 	 
-	    align(alignment, seq, genome, &best_score, &best);
+	    align(alignment, seq, idx.dna, &best_score, &best);
 	 }
 	 // Free alignment candidates
 	 free(alignments.align);
@@ -876,6 +877,10 @@ mapread
 	 free(chain_stack->ptr[i]);
       free(chain_stack);
    }
+
+   // Copy genomic sequences for best alignments.
+   for (size_t i = 0; i < best->pos; i++)
+      best->aln[i].refseq = decompress_genome(idx.dna, best->aln[i].refpos, slen + best->aln[i].score);
    
    // Free seeds
    for (size_t i = 0; i < seeds->pos; i++)

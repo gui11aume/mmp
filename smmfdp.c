@@ -82,12 +82,36 @@ build_index
    FILE * fasta = fopen(fname, "r");
    if (fasta == NULL) exit_cannot_open(fname);
 
+   // Aux variables for file writing.
+   char * data;
+   ssize_t ws;
+   size_t sz;
+
    char buff[256];
+   size_t gsize;
 
    // Read and normalize genome
    sprintf(buff, "%s.chr", fname);
    fprintf(stderr, "reading genome... ");
-   char * genome = normalize_genome(fasta, buff);
+   char * genome = normalize_genome(fasta, buff, &gsize);
+   fprintf(stderr, "done.\n");
+
+   fprintf(stderr, "compressing nucleotides... ");
+   char * dna = compress_genome(genome, gsize);
+
+   // Write the compressed genome
+   sprintf(buff, "%s.dna", fname);
+   int fdna = creat(buff, 0644);
+   if (fdna < 0) exit_cannot_open(buff);
+   
+   ws = 0;
+   sz = gsize/4+1;
+   data = (char *) dna;
+   while (ws < sz) ws += write(fdna, data + ws, sz - ws);
+   close(fdna);
+
+   // Free compressed genome
+   free(dna);
    fprintf(stderr, "done.\n");
 
    fprintf(stderr, "creating suffix array... ");
@@ -104,24 +128,18 @@ build_index
 
    fprintf(stderr, "filling lookup table... ");
    lut_t * lut = malloc(sizeof(lut_t));
-   fill_lut(lut, occ, (range_t) {.bot=1, .top=strlen(genome)}, 0, 0);
+   fill_lut(lut, occ, (range_t) {.bot=1, .top=gsize}, 0, 0);
    fprintf(stderr, "done.\n");
 
    fprintf(stderr, "compressing suffix array... ");
    csa_t * csa = compress_sa(sa);
    fprintf(stderr, "done.\n");
 
-   // Write files
-   char * data;
-   ssize_t ws;
-   size_t sz;
-
-
    // Write the compressed suffix array file.
    sprintf(buff, "%s.sa", fname);
    int fsar = creat(buff, 0644);
    if (fsar < 0) exit_cannot_open(buff);
-   
+
    ws = 0;
    sz = sizeof(csa_t) + csa->nint64 * sizeof(int64_t);
    data = (char *) csa;
@@ -186,6 +204,15 @@ load_index
    chr_t * chr = index_load_chr(fname);
    exit_error(chr == NULL);
 
+   sprintf(buff, "%s.dna", fname);
+   int fdna = open(buff, O_RDONLY);
+   if (fdna < 0) exit_cannot_open(buff);
+
+   mmsz = lseek(fdna, 0, SEEK_END);
+   char *dna = (char *) mmap(NULL, mmsz, PROT_READ, MMAP_FLAGS, fdna, 0);
+   exit_error(dna == NULL);
+   close(fdna);
+
    
    sprintf(buff, "%s.sa", fname);
    int fsar = open(buff, O_RDONLY);
@@ -227,7 +254,7 @@ load_index
    close(flut);
 
    return (index_t) {.chr = chr, .csa = csa, .bwt = bwt,
-      .occ = occ, .lut = lut };
+	 .occ = occ, .lut = lut, .dna = dna};
 
 }
 
@@ -715,12 +742,6 @@ batchmap
    // Load index files.
    index_t idx = load_index(indexfname);
 
-   // Load the genome.
-   FILE * fasta = fopen(indexfname, "r");
-   if (fasta == NULL) exit_cannot_open(indexfname);
-
-   char * genome = normalize_genome(fasta, NULL);
-
    fprintf(stderr, "done.\n");
    FILE * inputf = fopen(readsfname, "r");
    if (inputf == NULL) exit_cannot_open(readsfname);
@@ -768,7 +789,7 @@ batchmap
 
       for (int redo = 0 ; redo < 2 ; redo++) {
 
-         alnstack_t *alnstack = mapread(seq, idx, genome, GAMMA, skip);
+         alnstack_t *alnstack = mapread(seq, idx, GAMMA, skip);
          if (!alnstack) exit(EXIT_FAILURE);
 
          // Did not find anything.
@@ -791,6 +812,8 @@ batchmap
                         postquality(aln, seq, idx, skip);
 #endif
 
+	 for (size_t i = 0; i < alnstack->pos; i++)
+	    free(alnstack->aln[i].refseq);
          free(alnstack);
 
          // We are done if the quality is higher than 40

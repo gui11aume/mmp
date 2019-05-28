@@ -130,6 +130,7 @@ struct index_t {
    bwt_t * bwt;
    occ_t * occ;
    lut_t * lut;
+   char  * dna;
 };
 
 struct stack_t {
@@ -147,7 +148,9 @@ int64_t    * compute_sa(const char *);
 bwt_t      * create_bwt(const char *, const int64_t *);
 occ_t      * create_occ(const bwt_t *, const int);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
-char       * normalize_genome(FILE *, char *);
+char       * normalize_genome(FILE *, char *, size_t *);
+char       * compress_genome(char *, size_t);
+char       * decompress_genome(char *, size_t, size_t);
 chr_t      * index_load_chr(const char *);
 char       * chr_string(size_t, chr_t*);
 
