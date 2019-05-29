@@ -11,24 +11,7 @@
 #define PROBDEFAULT 0.01
 
 // Index parameters
-#define OCC_INTERVAL_SIZE 6
-
-// ------- Machine-specific code ------- //
-// The 'mmap()' option 'MAP_POPULATE' is available
-// only on Linux and from kern version 2.6.23.
-#if __linux__
-  #include <linux/version.h>
-  #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
-    #define _MAP_POPULATE_AVAILABLE
-  #endif
-#endif
-
-#ifdef _MAP_POPULATE_AVAILABLE
-  #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
-#else
-  #define MMAP_FLAGS MAP_PRIVATE
-#endif
-
+#define OCC_INTERVAL_SIZE 8
 
 // ------- Machine-specific code ------- //
 // The 'mmap()' option 'MAP_POPULATE' is available
@@ -846,39 +829,40 @@ batchmap
 }
 
 
-int main(int argc, char ** argv) {
+int
+main
+(
+ int argc,
+ char ** argv
+)
+{
 
    // Sanity checks.
    if (argc < 2) {
-      fprintf(stderr, "First argument must be \"index\" or \"mem\".\n");
+      fprintf(stderr, "First argument must be \"--index\" or index file.\n");
       exit(EXIT_FAILURE);
    }
 
-   if (strcmp(argv[1], "index") == 0) {
+   if (strcmp(argv[1], "--index") == 0) {
       if (argc < 3) {
          fprintf(stderr, "Specify file to index.\n");
          exit(EXIT_FAILURE);
       }
       build_index(argv[2]);
    }
-   else if (strcmp(argv[1], "mem") == 0) {
-      if (argc < 4) {
+   else {
+      if (argc < 3) {
          fprintf(stderr, "Specify index and read file.\n");
          exit(EXIT_FAILURE);
       }
       // Argument 5 is sequencing error.
-      if (argc == 5) {
-         PROB = strtod(argv[4], NULL);
+      if (argc == 4) {
+         PROB = strtod(argv[3], NULL);
          if (PROB <= 0 || PROB >= 1) {
             fprintf(stderr, "Sequencing error must be in (0,1).\n");
             exit(EXIT_FAILURE);
          }
       }
-      batchmap(argv[2], argv[3]);
+      batchmap(argv[1], argv[2]);
    }
-   else {
-      fprintf(stderr, "First argument must be \"index\" or \"mem\".\n");
-      exit(EXIT_FAILURE);
-   }
-
 }
