@@ -11,7 +11,7 @@
 #define PROBDEFAULT 0.01
 
 // Index parameters
-#define OCC_INTERVAL_SIZE 14
+#define OCC_INTERVAL_SIZE 6
 
 // ------- Machine-specific code ------- //
 // The 'mmap()' option 'MAP_POPULATE' is available
@@ -165,7 +165,7 @@ build_index
    if (focc < 0) exit_cannot_open(buff);
 
    ws = 0;
-   sz = sizeof(occ_t) + occ->occ_size*sizeof(uint64_t);
+   sz = sizeof(occ_t) + occ->occ_size*SIGMA*sizeof(uint64_t);
    data = (char *) occ;
    while (ws < sz) ws += write(focc, data + ws, sz - ws);
    close(focc);
@@ -831,6 +831,8 @@ batchmap
 
    }
 
+   fclose(inputf);
+   free_index_chr(idx.chr);
    free(seq);
    sesame_clean();
 

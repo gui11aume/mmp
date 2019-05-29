@@ -152,6 +152,7 @@ char       * normalize_genome(FILE *, char *, size_t *);
 char       * compress_genome(char *, size_t);
 char       * decompress_genome(char *, size_t, size_t);
 chr_t      * index_load_chr(const char *);
+void         free_index_chr(chr_t *);
 char       * chr_string(size_t, chr_t*);
 
 size_t       get_rank(const occ_t *, uint8_t, size_t);
