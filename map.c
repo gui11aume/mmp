@@ -157,7 +157,7 @@ recursive_mem_chain
  stack_t  * mems,
  size_t     mem_pos,
  size_t     chain_pos,
- seed_t   ** chain,
+ seed_t  ** chain,
  stack_t ** chain_stack
  )
 {
@@ -872,9 +872,11 @@ mapread
 	 // Free alignment candidates
 	 free(alignments.align);
       }
+
       // Free seed chains
-      for (int i = 0; i < chain_stack->pos; i++)
+      for (size_t i = 0; i < chain_stack->pos; i++) {
 	 free(chain_stack->ptr[i]);
+      }
       free(chain_stack);
    }
 
@@ -883,8 +885,11 @@ mapread
       best->aln[i].refseq = decompress_genome(idx.dna, best->aln[i].refpos, slen + best->aln[i].score);
    
    // Free seeds
-   for (size_t i = 0; i < seeds->pos; i++)
-      free(seeds->ptr[i]);
+   for (size_t i = 0; i < seeds->pos; i++) {
+      seed_t * s = (seed_t *) seeds->ptr[i];
+      free(s->sa);
+      free(s);
+   }
    free(seeds);
    
    return best;
