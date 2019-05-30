@@ -765,25 +765,27 @@ batchmap
          sesame_set_static_params(GAMMA, rlen, PROB);
       }
 
-      char *apos = NULL;
       double prob = 0./0.;
 
       int skip = 0; // Try MEM seeding first.
-
+      aln_t aln = {0};
+     
       for (int redo = 0 ; redo < 2 ; redo++) {
-
-         alnstack_t *alnstack = mapread(seq, idx, GAMMA, skip);
+	 alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip);
          if (!alnstack) exit(EXIT_FAILURE);
-
+	 
          // Did not find anything.
          if (alnstack->pos == 0) {
-            free(alnstack);
+	    free(alnstack);
             break;
-         }
+	 }
 
          // Pick a top alignment at "random".
-         aln_t aln = alnstack->aln[counter++ % alnstack->pos];
-         apos = chr_string(aln.refpos, idx.chr);
+	 aln_t a = alnstack->aln[counter++ % alnstack->pos];
+         aln.score = a.score;
+	 aln.refpos = a.refpos;
+	 aln.seed   = a.seed;
+	 aln.refseq = (void *)1;
 
          // In case of ties, the quality is the
          // probability of choosing the right one.
@@ -792,26 +794,31 @@ batchmap
 #else
          prob = alnstack->pos > 1 ?
                         1.0 - 1.0 / alnstack->pos :
-                        postquality(aln, seq, idx, skip);
+                        postquality(a, seq, idx, skip);
 #endif
 
+	 // Free alignments
 	 for (size_t i = 0; i < alnstack->pos; i++)
 	    free(alnstack->aln[i].refseq);
-         free(alnstack);
+	 free(alnstack);
+
 
          // We are done if the quality is higher than 40
          // (good case) or lower than 20 (hopeless).
          if (prob < 1e-4 || prob > 1e-2) break;
 
-         // Otherwise try skip seeds.
+	 // Otherwise try skip seeds
          skip = 8;
-
       }
 
-      fprintf(stdout, "%s\t%s\t%e\n", seq,
-            apos == NULL ? "NA" : apos, prob);
-      free(apos);
-
+      // Report mapping results
+      if (aln.refseq) {
+	 char * apos = chr_string(aln.refpos, idx.chr);
+	 fprintf(stdout, "%s\t%s\t%e\n", seq, apos, prob);
+	 free(apos);
+      } else {
+	 fprintf(stdout, "%s\t%s\t%e\n", seq, "NA", prob);
+      }
    }
 
    fclose(inputf);

@@ -399,6 +399,8 @@ chain_skip
       loc_list[nchain++] = (align_t){loc_list[n].refpos, span, minscore, loc_list[n].seed};
    }
 
+   free(chain_coverage);
+
    loc_list = realloc(loc_list, nchain*sizeof(align_t));
    exit_on_memory_error(loc_list);
 
@@ -831,6 +833,8 @@ mapread
 	 
 	 align(alignment, seq, idx.dna, &best_score, &best);
       }
+      // Free alignment candidates
+      free(alignments.align);
    } else {
       stack_t * chain_stack = chain_mems(slen, seeds);
       for (size_t i = 0; i < chain_stack->pos; i++) {
