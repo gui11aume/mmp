@@ -29,6 +29,22 @@
   #define MMAP_FLAGS MAP_PRIVATE
 #endif
 
+// ------- Machine-specific code ------- //
+// The 'mmap()' option 'MAP_POPULATE' is available
+// only on Linux and from kern version 2.6.23.
+#if __linux__
+  #include <linux/version.h>
+  #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
+    #define _MAP_POPULATE_AVAILABLE
+  #endif
+#endif
+
+#ifdef _MAP_POPULATE_AVAILABLE
+  #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
+#else
+  #define MMAP_FLAGS MAP_PRIVATE
+#endif
+
 
 // Error-handling macro.
 #define exit_cannot_open(x) \
@@ -79,6 +95,8 @@ build_index
    char * genome = normalize_genome(fasta, buff, &gsize);
    fprintf(stderr, "done.\n");
 
+   fclose(fasta);
+
    fprintf(stderr, "compressing nucleotides... ");
    char * dna = compress_genome(genome, gsize);
 
@@ -93,7 +111,6 @@ build_index
    while (ws < sz) ws += write(fdna, data + ws, sz - ws);
    close(fdna);
 
-   // Free compressed genome
    free(dna);
    fprintf(stderr, "done.\n");
 
@@ -104,6 +121,8 @@ build_index
    fprintf(stderr, "creating bwt... ");
    bwt_t * bwt = create_bwt(genome, sa);
    fprintf(stderr, "done.\n");
+
+   free(genome);
 
    fprintf(stderr, "creating Occ table... ");
    occ_t * occ = create_occ(bwt, OCC_INTERVAL_SIZE);
@@ -118,6 +137,8 @@ build_index
    csa_t * csa = compress_sa(sa);
    fprintf(stderr, "done.\n");
 
+   free(sa);
+
    // Write the compressed suffix array file.
    sprintf(buff, "%s.sa", fname);
    int fsar = creat(buff, 0644);
@@ -129,6 +150,7 @@ build_index
    while (ws < sz) ws += write(fsar, data + ws, sz - ws);
    close(fsar);
 
+   free(csa);
 
    // Write the Burrows-Wheeler transform.
    sprintf(buff, "%s.bwt", fname);
@@ -141,6 +163,7 @@ build_index
    while (ws < sz) ws += write(fbwt, data + ws, sz - ws);
    close(fbwt);
 
+   free(bwt);
 
    // Write the Occ table.
    sprintf(buff, "%s.occ", fname);
@@ -153,6 +176,7 @@ build_index
    while (ws < sz) ws += write(focc, data + ws, sz - ws);
    close(focc);
 
+   free(occ);
 
    // Write the lookup table
    sprintf(buff, "%s.lut", fname);
@@ -165,10 +189,6 @@ build_index
    while (ws < sz) ws += write(flut, data + ws, sz - ws);
    close(flut);
 
-   // Clean up.
-   free(csa);
-   free(bwt);
-   free(occ);
    free(lut);
 
 }
