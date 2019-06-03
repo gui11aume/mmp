@@ -18,7 +18,7 @@
 
 #ifndef DEFAULT_SAMPLINGS
 // Number of MCMC samples.
-#define DEFAULT_SAMPLINGS 10000000
+#define DEFAULT_SAMPLINGS 1000000
 #endif
 
 #ifndef HSIZE

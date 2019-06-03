@@ -154,11 +154,11 @@ nw
 void
 recursive_mem_chain
 (
- stack_t  * mems,
- size_t     mem_pos,
- size_t     chain_pos,
- seed_t  ** chain,
- stack_t ** chain_stack
+ wstack_t  * mems,
+ size_t      mem_pos,
+ size_t      chain_pos,
+ seed_t   ** chain,
+ wstack_t ** chain_stack
  )
 {
    size_t mem_end = ((seed_t *) mems->ptr[mem_pos])->end;
@@ -194,14 +194,14 @@ recursive_mem_chain
 }
 
 
-stack_t *
+wstack_t *
 nonoverlapping_mems
 (
- stack_t * mems
+ wstack_t * mems
  )
 {
    // Alloc.
-   stack_t * chain_stack = stack_new(8);
+   wstack_t * chain_stack = stack_new(8);
 
    if (mems->pos > 0) {
       seed_t  ** chain = malloc(mems->pos*sizeof(seed_t *));
@@ -254,15 +254,15 @@ mem_chain_min_score
    return minscore;
 }
 
-stack_t *
+wstack_t *
 chain_mems
 (
- int       slen,
- stack_t * mems
+ int        slen,
+ wstack_t * mems
 )
 {
    // Find all non-overlapping MEM combinations.
-   stack_t * chain_stack = nonoverlapping_mems(mems);
+   wstack_t * chain_stack = nonoverlapping_mems(mems);
 
    // Compute minimum alignment score given seed distribution.
    for (int i = 0; i < chain_stack->pos; i++) {
@@ -293,11 +293,11 @@ chain_mems
 aligncd_t
 chain_skip
 (
- size_t    slen,
- int       gamma,
- int       skip,    
- stack_t * seeds,
- index_t   idx
+ size_t     slen,
+ int        gamma,
+ int        skip,    
+ wstack_t * seeds,
+ index_t    idx
 )
 {
    // Get all Suffix Arrays.
@@ -411,7 +411,7 @@ chain_skip
    
 }
 
-stack_t *
+wstack_t *
 mem_seeds
 (
  const char    * seq,
@@ -427,7 +427,7 @@ mem_seeds
       return stack_new(1);
 
    // Initialize mem stack
-   stack_t * mems = stack_new(32);
+   wstack_t * mems = stack_new(32);
 
    // Allocate range variables
    range_t range = {0};
@@ -534,7 +534,7 @@ mem_seeds
    
 }
 
-stack_t *
+wstack_t *
 skip_seeds
 (
  const char    * seq,
@@ -551,7 +551,7 @@ skip_seeds
       return stack_new(1);
 
    // Initialize mem stack
-   stack_t * seeds = stack_new(32);
+   wstack_t * seeds = stack_new(32);
 
    // Allocate range variables
    range_t range = {0};
@@ -749,7 +749,7 @@ align
    // Check align score.
    if (score <= *best_score) {
       // Create new alignment.
-      aln_t aln;
+      aln_t aln = {0};
       aln.score  = score;
       aln.refpos = alignment.refpos - seed->beg;
       aln.refseq = NULL;
@@ -789,7 +789,7 @@ mapread
    }
 
    // Get seeds
-   stack_t * seeds = NULL;
+   wstack_t * seeds = NULL;
    if (skip) {
       seeds = skip_seeds(seq, idx, gamma, skip);
    } else {
@@ -836,7 +836,7 @@ mapread
       // Free alignment candidates
       free(alignments.align);
    } else {
-      stack_t * chain_stack = chain_mems(slen, seeds);
+      wstack_t * chain_stack = chain_mems(slen, seeds);
       for (size_t i = 0; i < chain_stack->pos; i++) {
 	 // 
 	 seedchain_t * mem_chain  = (seedchain_t *) chain_stack->ptr[i];

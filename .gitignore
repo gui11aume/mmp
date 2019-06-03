@@ -8,3 +8,4 @@
 *.gdb
 *.fasta
 *.fastq.gz
+.vimtags
