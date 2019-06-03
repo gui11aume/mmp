@@ -619,13 +619,11 @@ batchmap
 #endif
 
          // Free alignments
-         for (size_t i = 0; i < alnstack->pos; i++)
-            free(alnstack->aln[i].refseq);
          free(alnstack);
 
          // We are done if the quality is higher than 40
          // (good case) or lower than 20 (hopeless).
-         if (aln[0].qual < 1e-4 || aln[0].qual > 1e-2) break;
+         if (aln[0].score == 0 || aln[0].qual < 1e-4 || aln[0].qual > 1e-2) break;
 
          // Otherwise try skip seeds
          skip = 8;
