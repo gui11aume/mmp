@@ -59,6 +59,20 @@ int           seed_by_span (const void * a, const void * b) {
 int           mem_by_start (const void * a, const void * b) {
    return (*(seed_t **)a)->beg > (*(seed_t **)b)->beg;
 };
+
+int           mem_by_loci (const void * a, const void * b) {
+   seed_t * sa = *(seed_t **)a;
+   seed_t * sb = *(seed_t **)b;
+   return (sa->range.top - sa->range.bot) > (sb->range.top - sb->range.bot);
+};
+
+int           mem_by_span (const void * a, const void * b) {
+   seed_t * sa = *(seed_t **)a;
+   seed_t * sb = *(seed_t **)b;
+   return (sa->end - sa->beg) < (sb->end - sb->beg);
+};
+
+
 int           minscore_then_span (const void * a, const void * b) {
    int sa = (*(seedchain_t **)a)->minscore;
    int sb = (*(seedchain_t **)b)->minscore;
@@ -514,20 +528,10 @@ mem_seeds
       fprintf(stdout,"\nMEMs (%ld):\n", mems->pos);
       for(int i = 0; i < mems->pos; i++) {
 	 seed_t * m = (seed_t *) mems->ptr[i];
-	 fprintf(stdout, "[%d] (%ld, %ld) range: (%ld, %ld)\n", i, m->beg, m->end, m->range.bot, m->range.top);
+	 fprintf(stdout, "[%d] (%ld, %ld) loci: %ld, range: (%ld, %ld)\n",
+		 i, m->beg, m->end, m->range.top-m->range.bot+1, m->range.bot, m->range.top);
       }
       fprintf(stdout,"\n");
-   }
-
-   // Filter repeats > MAX_MEM_SEED_LOCI.
-   for (size_t i = 0; i < mems->pos; i++) {
-      seed_t * m = (seed_t *) mems->ptr[i];
-      size_t  mem_loci = m->range.top - m->range.bot + 1;
-      if (mem_loci > MAX_MEM_SEED_LOCI) {
-	 m->range.top = m->range.bot + MAX_MEM_SEED_LOCI - 1;
-	 if (DEBUG_VERBOSE)
-	    fprintf(stdout, "[MEM %ld] too many loci (%ld > MAX_MEM_SEED_LOCI(%d))\n", i, mem_loci, MAX_MEM_SEED_LOCI);
-      }
    }
 
    return mems;
@@ -704,6 +708,7 @@ align
  align_t       alignment,
  const char  * seq,
  char        * genome,
+ size_t        genome_len,
  int         * best_score,
  alnstack_t ** best
 )
@@ -712,6 +717,9 @@ align
    size_t   slen = strlen(seq);
 
    if (seed->beg > alignment.refpos)
+      return;
+
+   if (alignment.refpos + slen - seed->beg >= genome_len)
       return;
 
    int score;
@@ -816,72 +824,82 @@ mapread
 	    break;
 	 }
 
-	 // Check genome limits.
-	 if (alignment.seed->beg > alignment.refpos || alignment.refpos + slen - alignment.seed->beg >= idx.occ->txtlen) {
-	    if (DEBUG_VERBOSE) {
-	       char * strpos  = chr_string(alignment.refpos, idx.chr);
-	       fprintf(stdout, "alignment out of genome bounds: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, alignment.minscore);
-	    }
-	    continue;
-	 }
-	    
 	 if (DEBUG_VERBOSE) {
 	    char * strpos  = chr_string(alignment.refpos, idx.chr);
 	    fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, alignment.minscore);
 	    free(strpos);
 	 }
 	 
-	 align(alignment, seq, idx.dna, &best_score, &best);
+	 align(alignment, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
       }
       // Free alignment candidates
       free(alignments.align);
+      
    } else {
-      stack_t * chain_stack = chain_mems(slen, seeds);
-      for (size_t i = 0; i < chain_stack->pos; i++) {
-	 // 
-	 seedchain_t * mem_chain  = (seedchain_t *) chain_stack->ptr[i];
-	 if (mem_chain->minscore > best_score || (mem_chain->minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
-	    if (DEBUG_VERBOSE)
-	       fprintf(stdout, "no more interesting candidate chains. skipping alignments.\n");
-	    break;
-	 }
-	 // 
-	 aligncd_t alignments = mem_alignments(mem_chain, idx, slen);
-	 for (int j = 0; j < alignments.cnt; j++) {
-	    align_t alignment = alignments.align[j];
-	    // Do not align chained alncd.
-	    if (!alignment.span || (mem_chain->minscore >= best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
-	       if (DEBUG_VERBOSE)
-		  fprintf(stdout, "no more interesting alignments in this chain. skipping chain.\n");
-	       break;
-	    }
+      // Sort MEMs by loci, ascending.
+      qsort(seeds->ptr, seeds->pos, sizeof(seed_t *), mem_by_loci);
 
-	    // Check genome limits.
-	    if (alignment.seed->beg > alignment.refpos || alignment.refpos + slen - alignment.seed->beg >= idx.occ->txtlen) {
-	       if (DEBUG_VERBOSE) {
-		  char * strpos  = chr_string(alignment.refpos, idx.chr);
-		  fprintf(stdout, "alignment out of genome bounds: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, mem_chain->minscore);
-	       }
-	       continue;
-	    }
-	    
+      // Alignable MEMS.
+      size_t n_mem = 0;
+      for (size_t i = 0; i < seeds->pos; i++, n_mem++) {
+	 seed_t * s = (seed_t *)seeds->ptr[i];
+	 if (s->range.top - s->range.bot >= MAX_MEM_SEED_LOCI)
+	    break;
+      }
+
+      // Compute repeats minscore.
+      int repeats_minscore = slen+1;
+      for (size_t i = n_mem; i < seeds->pos; i++) {
+	 seed_t * s = (seed_t *)seeds->ptr[i];
+	 repeats_minscore = min(repeats_minscore, (s->beg > 0) + (s->end < slen-1));
+      }
+
+      if (DEBUG_VERBOSE) {
+	 fprintf(stdout, "MEMs: %ld, alignable-MEM: %ld, repeat-minscore: %d\n",
+		 seeds->pos, n_mem, repeats_minscore);
+      }
+
+      // Align seeds.
+      // Sort alignable seeds by span.
+      qsort(seeds->ptr, n_mem, sizeof(seed_t *), mem_by_span);
+      for (size_t i = 0; i < n_mem; i++) {
+	 seed_t * mem = (seed_t *)seeds->ptr[i];
+	 int minscore = (mem->beg > 0) + (mem->end < slen-1);
+
+	 if (DEBUG_VERBOSE) {
+	    fprintf(stdout, "MEM[%ld] beg: %ld, end: %ld, span: %ld, minscore: %d, loci: %ld\n",
+		    i, mem->beg, mem->end, mem->end-mem->beg+1, minscore,
+		    mem->range.top - mem->range.bot + 1);
+	 }
+	 
+	 // Avoid useless alignments.
+	 if (minscore >= repeats_minscore || minscore > best_score || (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS))
+	    continue;
+
+	 // Get SA values.
+	 mem->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, mem->range);
+
+	 // Align at each locus.
+	 for (int k = 0; k < mem->range.top - mem->range.bot + 1; k++) {
+	    align_t alignment = (align_t){mem->sa[k], mem->end - mem->beg + 1, minscore, mem};
 	    if (DEBUG_VERBOSE) {
 	       char * strpos  = chr_string(alignment.refpos, idx.chr);
-	       fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, mem_chain->minscore);
+	       fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, MEM minscore: %d\n",
+		       alignment.refpos, strpos, alignment.span, minscore);
 	       free(strpos);
 	    }
-	 
-	    align(alignment, seq, idx.dna, &best_score, &best);
+	    align(alignment, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
+	    
+	    // Stop alignments if necessary conditions met
+	    if (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
+	       break;
 	 }
-	 // Free alignment candidates
-	 free(alignments.align);
       }
 
-      // Free seed chains
-      for (size_t i = 0; i < chain_stack->pos; i++) {
-	 free(chain_stack->ptr[i]);
+      // Check if best alignment is 100% unique
+      if (best_score >= repeats_minscore) {
+	 best->pos = 0;
       }
-      free(chain_stack);
    }
 
    // Copy genomic sequences for best alignments.
