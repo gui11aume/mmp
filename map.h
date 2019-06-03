@@ -28,7 +28,8 @@ struct aln_t {
    int      score;
    size_t   refpos;
    char   * refseq;
-   seed_t   seed;
+   size_t   read_beg;
+   size_t   read_end;
    double   qual;
 };
 

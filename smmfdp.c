@@ -601,10 +601,11 @@ batchmap
 
          // Pick a top alignment at "random".
          aln_t a = alnstack->aln[counter++ % alnstack->pos];
-         aln[redo].score  = a.score;
-         aln[redo].refpos = a.refpos;
-         aln[redo].seed   = a.seed;
-         aln[redo].refseq = a.refseq;
+         aln[redo].score    = a.score;
+         aln[redo].refpos   = a.refpos;
+         aln[redo].refseq   = a.refseq;
+	 aln[redo].read_beg = a.read_beg;
+	 aln[redo].read_end = a.read_end;
 
 #ifdef NOQUAL
          // XXX This compiler directive will disappear XXX //

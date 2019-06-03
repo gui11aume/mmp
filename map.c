@@ -758,10 +758,11 @@ align
    if (score <= *best_score) {
       // Create new alignment.
       aln_t aln = {0};
-      aln.score  = score;
-      aln.refpos = alignment.refpos - seed->beg;
-      aln.refseq = NULL;
-      aln.seed   = *seed;
+      aln.score    = score;
+      aln.refpos   = alignment.refpos - seed->beg;
+      aln.read_beg = seed->beg;
+      aln.read_end = seed->end;
+      aln.refseq   = NULL;
 
       if (score < *best_score) {
 	 *best_score = score;
