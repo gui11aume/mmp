@@ -29,6 +29,7 @@ struct aln_t {
    size_t   refpos;
    char   * refseq;
    seed_t   seed;
+   double   qual;
 };
 
 struct alnstack_t {

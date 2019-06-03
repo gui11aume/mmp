@@ -710,8 +710,8 @@ normalize_genome
    exit_on_memory_error(genome);
 
    // Chromosome file.
-   stack_t * seqnames = stack_new(64);
-   stack_t * seqstart = stack_new(64);
+   wstack_t * seqnames = stack_new(64);
+   wstack_t * seqstart = stack_new(64);
    
    // Load fasta file line by line and concatenate.
    while ((rlen = getline(&buffer, &sz, inputf)) != -1) {
@@ -809,15 +809,15 @@ normalize_genome
 
 }
 
-stack_t *
+wstack_t *
 stack_new
 (
  size_t max
  )
 {
-   size_t base = sizeof(stack_t);
+   size_t base = sizeof(wstack_t);
    size_t extra = max * sizeof(void *);
-   stack_t * stack = malloc(base + extra);
+   wstack_t * stack = malloc(base + extra);
    exit_on_memory_error(stack);
 
    stack->max = max;
@@ -828,15 +828,15 @@ stack_new
 void
 push
 (
- void     * ptr,
- stack_t ** stackp
+ void      * ptr,
+ wstack_t ** stackp
  )
 {
-   stack_t * stack = *stackp;
+   wstack_t * stack = *stackp;
    if (stack->pos >= stack->max) {
       size_t newmax = stack->max*2;
       stack = *stackp = realloc(stack,
-				sizeof(stack_t)+newmax*sizeof(void *));
+				sizeof(wstack_t)+newmax*sizeof(void *));
       exit_on_memory_error(stack);
       stack->max = newmax;
    }

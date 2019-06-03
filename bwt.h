@@ -30,7 +30,7 @@ typedef struct index_t    index_t;
 typedef struct occ_t      occ_t;
 typedef struct chr_t      chr_t;
 typedef struct range_t    range_t;
-typedef struct stack_t    stack_t;
+typedef struct wstack_t   wstack_t;
 
 typedef unsigned int uint_t;
 
@@ -133,7 +133,7 @@ struct index_t {
    char  * dna;
 };
 
-struct stack_t {
+struct wstack_t {
    size_t   pos;
    size_t   max;
    void   * ptr[];
@@ -160,8 +160,8 @@ range_t      backward_search(const char *, const size_t, const occ_t *);
 size_t       query_csa(csa_t*, bwt_t*, occ_t*, size_t);
 size_t     * query_csa_range(csa_t *, bwt_t *, occ_t *, range_t);
 
-stack_t    *  stack_new    (size_t max);
-void          push         (void * ptr, stack_t ** stackp);
+wstack_t   *  stack_new    (size_t max);
+void          push         (void * ptr, wstack_t ** stackp);
 
 
 #endif

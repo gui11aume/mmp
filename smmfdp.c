@@ -398,7 +398,8 @@ cmpN0
 }
 
 
-seedp_t
+//seedp_t
+double
 quality
 (
          aln_t   aln,
@@ -407,6 +408,9 @@ quality
          int     skip
 )
 {
+
+   double poff;
+   double best_mu = .06;
 
    double slen = strlen(seq);
    // FIXME: assert is very weak (here only
@@ -421,7 +425,6 @@ quality
 
    int tot = 0;
    for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
-      //uN0[tot] = estimate_uN0(aln.refseq + s, idx);
       uN0[tot] = estimate_uN0(aln.refseq + s, idx);
       // Case that estimation failed (e.g., because of "N").
       if (uN0[tot].u != uN0[tot].u) {
@@ -443,42 +446,12 @@ quality
       // All the estimates of N0 are similar. Take the median.
       qsort(uN0, tot, sizeof(uN0_t), cmpN0);
 
-      double best_mu = uN0[tot/2].u;
+      best_mu = uN0[tot/2].u;
       double best_N0 = uN0[tot/2].N0;
 
-      double poff;
-      double pnul;
-
-      // Probability of a purely random hit.
-      double P = 1-exp(-(slen-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-      if (skip == 0) {
-         poff = auto_mem_seed_offp(slen, best_mu, best_N0);
-         pnul = auto_mem_seed_nullp(slen, best_mu, best_N0) * P;
-      }
-      else {
-         poff = auto_skip_seed_offp(slen, skip, best_mu, best_N0);
-         pnul = auto_skip_seed_nullp(slen, skip, best_mu, best_N0) * P;
-      }
-
-      if (maxN0 <= 1 && minu == 0.06) {
-         // Special "high confidence" case. On every segment, the
-         // estimate of N0 is 1. However, this minimum value is
-         // pessimistic because it is also possible that N0 is 0,
-         // in which case seeding cannot be off target. So the
-         // probability that we are looking for is the probability
-         // that N0 is really equal to 1, times the probability that
-         // MEM seeding is off target.
-         //
-         // Since u = 0.06, each 10-bp window contains a difference
-         // with probability 0.461. If there is a difference in the
-         // central window of each 30 bp segment used for the
-         // estimation, the duplicate will not be discovered.
-         double pdiff = pow(.461, tot);
-         double pmiss = 0.2 * pdiff / (0.8 + 0.2 * pdiff); // Bayes formula.
-         poff *= pmiss;
-      }
-
-      return (seedp_t) { poff, pnul };
+      poff = skip == 0 ?
+         auto_mem_seed_offp(slen, best_mu, best_N0) :
+         auto_skip_seed_offp(slen, skip, best_mu, best_N0);
 
    }
    else {
@@ -544,193 +517,18 @@ quality
          wrong2 = auto_skip_seed_offp(l2, skip, best_mu2, best_N02);
       }
 
-      // Here we do need to count the probability of a purely
-      // random hit only for a double "nada" (otherwise we
-      // already know that there is "some" hit after seeding).
-      double P = 1-exp(-(slen-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-
-      double poff = nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
-      double pnul = nada1 * nada2 * P;
-
-      return (seedp_t) { poff, pnul };
+      poff = nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
 
    }
+
+   double A = aln.score * log(0.01) + (slen-aln.score) * log(0.99);
+   double B = aln.score * log(best_mu) + (slen-aln.score) * log(1-best_mu);
+   double posterior =
+      1.0 / ( 1.0 + exp(A + log(1-poff) - log(poff) - B) );
+
+   return posterior;
 
 }
-
-double
-postquality
-(
-         aln_t   aln,
-   const char *  seq,
-         index_t idx,
-         int     skip
-)
-{
-
-   seedp_t p = quality(aln, seq, idx, skip);
-   size_t slen = strlen(seq);
-
-   // Binomial terms (for probability of null).
-   // FIXME: make sure we never get negative numbers.
-   double A = lgamma(slen+1) - lgamma(slen-aln.score+1) -
-      lgamma(aln.score+1) + aln.score * log(0.01) +
-      (slen-aln.score) * log(0.99);
-   double B = lgamma(slen-GAMMA+1) - lgamma(slen-GAMMA-aln.score+1) -
-      lgamma(aln.score+1) + aln.score * log(0.75) +
-      (slen-GAMMA-aln.score) * log(0.25);
-   double pnul_given_score =
-      1.0 / ( 1.0 + exp(A + log(1-p.nul) - B - log(p.off)) );
-
-   return pnul_given_score + p.off >= 1.0 ? 1.0 : pnul_given_score + p.off;
-
-
-}
-
-
-#if 0
-double
-quality
-(
-         aln_t   aln,
-   const char *  seq,
-         index_t idx
-)
-{
-
-   double slen = strlen(seq);
-   // TODO: fix weak assert. //
-   assert(slen < 250);
-
-   uN0_t uN0[50];
-
-   // Assume the worst (many similar duplicates).
-   const double worst_case_mu = 0.02;
-   const size_t worst_case_N0 = 64000;
-
-   int tot = 0;
-   for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
-      uN0[tot] = estimate_uN0(aln.refseq + s, idx);
-      // Case that estimation failed (e.g., because of "N").
-      if (uN0[tot].u != uN0[tot].u) {
-         uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0 };
-      }
-   }
-
-   // Find min/max N0.
-   int minN0 = 64000;
-   int maxN0 = 0;
-   double minu = 1.0;
-   for (int i = 0 ; i < tot ; i++) {
-      if (uN0[i].N0 > maxN0) maxN0 = uN0[i].N0;
-      if (uN0[i].N0 < minN0) minN0 = uN0[i].N0;
-      if (uN0[i].u < minu) minu = uN0[i].u;
-   }
-
-   if (maxN0 < 10 * minN0 || maxN0 < 20) {
-      // All the estimates of N0 are similar. Take the median.
-      qsort(uN0, tot, sizeof(uN0_t), cmpN0);
-
-      double best_mu = uN0[tot/2].u;
-      double best_N0 = uN0[tot/2].N0;
-
-      // Probability of a purely random hit.
-      double P = 1-exp(-(slen-GAMMA) * (idx.chr->gsize) / pow(4,GAMMA));
-      // Probabilities of seeding errors.
-      double pnul = auto_mem_seed_nullp(slen, best_mu, best_N0) * P;
-      double poff = auto_mem_seed_offp(slen, best_mu, best_N0);
-
-      if (maxN0 <= 1 && minu == 0.06) {
-         // Special "high confidence" case. On every segment, the
-         // estimate of N0 is 1. However, this minimum value is
-         // pessimistic because it is also possible that N0 is 0,
-         // in which case seeding cannot be off target. So the
-         // probability that we are looking for is the probability
-         // that N0 is really equal to 1, times the probability that
-         // MEM seeding is off target.
-         //
-         // Since u = 0.06, each 10-bp window contains a difference
-         // with probability 0.461. If there is a difference in the
-         // central window of each 30 bp segment used for the
-         // estimation, the duplicate will not be discovered.
-         double pdiff = pow(.461, tot);
-         double pmiss = 0.2 * pdiff / (0.8 + 0.2 * pdiff); // Bayes formula.
-         poff *= pmiss;
-      }
-
-      // Binomial terms (for probability of null).
-      double A = lgamma(slen+1) - lgamma(slen-aln.score+1) -
-         lgamma(aln.score+1) + aln.score * log(0.01) +
-         (slen-aln.score) * log(0.99);
-      double B = lgamma(slen-GAMMA+1) - lgamma(slen-GAMMA-aln.score+1) -
-         lgamma(aln.score+1) + aln.score * log(0.75) +
-         (slen-GAMMA-aln.score) * log(0.25);
-      double pnul_given_data =
-         1.0 / ( 1.0 + exp(A + log(1-pnul) - B - log(poff)) );
-
-      return pnul_given_data + poff >= 1.0 ? 1.0 : pnul_given_data + poff;
-
-   }
-   else {
-      // The estimates vary a lot. Split the read.
-      // Find the cut point (use max SSE inter).
-      double s1 = log(uN0[0].N0);
-      double s2 = 0;
-      for (int i = 1 ; i < tot ; i++) { s2 += log(uN0[i].N0); }
-      int n1 = 1;
-      int n2 = tot-1;
-      double maxC = pow(s1,2)/n1 + pow(s2,2)/n2;
-      int bkpt = 0;
-      for (int i = 1 ; i < tot-1 ; i++) {
-         n1++;
-         n2--;
-         s1 += log(uN0[i].N0);
-         s2 -= log(uN0[i].N0);
-         double C = pow(s1,2)/n1 + pow(s2,2)/n2;
-         if (C > maxC) {
-            maxC = C;
-            bkpt = i;
-         }
-      }
-      // Split (take separate medians).
-      int tot1 = bkpt+1;
-      int tot2 = tot - tot1;
-      qsort(uN0, tot1, sizeof(uN0_t), cmpN0);
-      qsort(uN0 + tot1, tot2, sizeof(uN0_t), cmpN0);
-
-      double best_mu1 = uN0[tot1/2].u;
-      int best_N01 = uN0[tot1/2].N0;
-      double best_mu2 = uN0[tot1 + tot2/2].u;
-      int best_N02 = uN0[tot1 + tot2/2].N0;
-      
-      if (best_N01 < 10*best_N02 && best_N02 < 10*best_N01) {
-         // The read is fishy (possibly it has a repeat in the middle).
-         // Reduce the confidence by taking the max N0 on each
-         // segment instead.
-         best_mu1 = uN0[tot1-1].u;
-         best_N01 = uN0[tot1-1].N0;
-         best_mu2 = uN0[tot -1].u;
-         best_N02 = uN0[tot -1].N0;
-      }
-
-      double l1 = (tot % 2 == 0) ? 10 + 10*tot1 : 5  + 10*tot1;
-      double l2 = (tot % 2 == 0) ? 10 + 10*tot2 : 15 + 10*tot2;
-
-      // Here we do not need to count the probability of a purely
-      // random hit.
-
-      double nada1 = auto_mem_seed_nullp(l1, best_mu1, best_N01);
-      double wrong1 = auto_mem_seed_offp(l1, best_mu1, best_N01);
-
-      double nada2 = auto_mem_seed_nullp(l2, best_mu2, best_N02);
-      double wrong2 = auto_mem_seed_offp(l2, best_mu2, best_N02);
-
-      return nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
-
-   }
-
-}
-#endif
 
 
 void
@@ -785,59 +583,70 @@ batchmap
          sesame_set_static_params(GAMMA, rlen, PROB);
       }
 
-      double prob = 0./0.;
-
       int skip = 0; // Try MEM seeding first.
-      aln_t aln = {0};
-     
+      aln_t aln[2]  = {{0}};
+
+      aln[0].score = aln[1].score = 9999;
+
       for (int redo = 0 ; redo < 2 ; redo++) {
-	 alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip);
+
+         alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip);
          if (!alnstack) exit(EXIT_FAILURE);
-	 
+
          // Did not find anything.
          if (alnstack->pos == 0) {
-	    free(alnstack);
+            free(alnstack);
             break;
-	 }
+         }
 
          // Pick a top alignment at "random".
-	 aln_t a = alnstack->aln[counter++ % alnstack->pos];
-         aln.score = a.score;
-	 aln.refpos = a.refpos;
-	 aln.seed   = a.seed;
-	 aln.refseq = (void *)1;
+         aln_t a = alnstack->aln[counter++ % alnstack->pos];
+         aln[redo].score  = a.score;
+         aln[redo].refpos = a.refpos;
+         aln[redo].seed   = a.seed;
+         aln[redo].refseq = a.refseq;
 
+#ifdef NOQUAL
+         // XXX This compiler directive will disappear XXX //
+         // XXX when releasing the real code.          XXX //
+         aln[redo].qual = 1.0;
+#else
          // In case of ties, the quality is the
          // probability of choosing the right one.
-#ifdef NOQUAL
-         prob = 1.0;
-#else
-         prob = alnstack->pos > 1 ?
-                        1.0 - 1.0 / alnstack->pos :
-                        postquality(a, seq, idx, skip);
+         aln[redo].qual = alnstack->pos > 1 ?
+            1.0 - 1.0 / alnstack->pos :
+            quality(aln[redo], seq, idx, skip);
 #endif
 
-	 // Free alignments
-	 for (size_t i = 0; i < alnstack->pos; i++)
-	    free(alnstack->aln[i].refseq);
-	 free(alnstack);
-
+         // Free alignments
+         for (size_t i = 0; i < alnstack->pos; i++)
+            free(alnstack->aln[i].refseq);
+         free(alnstack);
 
          // We are done if the quality is higher than 40
          // (good case) or lower than 20 (hopeless).
-         if (prob < 1e-4 || prob > 1e-2) break;
+         if (aln[0].qual < 1e-4 || aln[0].qual > 1e-2) break;
 
-	 // Otherwise try skip seeds
+         // Otherwise try skip seeds
          skip = 8;
+
       }
 
       // Report mapping results
-      if (aln.refseq) {
-	 char * apos = chr_string(aln.refpos, idx.chr);
-	 fprintf(stdout, "%s\t%s\t%e\n", seq, apos, prob);
-	 free(apos);
+      if (aln[0].score >= 9999 && aln[1].score >= 9999) {
+         // Nothing found.
+         fprintf(stdout, "%s\tNA\tNA\n", seq);
+      }
+      else if (aln[0].score < aln[1].score) {
+         // Use MEM alignment.
+         char * apos = chr_string(aln[0].refpos, idx.chr);
+         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[0].qual);
+         free(apos);
       } else {
-	 fprintf(stdout, "%s\t%s\t%e\n", seq, "NA", prob);
+         // Use skip alignment.
+         char * apos = chr_string(aln[1].refpos, idx.chr);
+         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[1].qual);
+         free(apos);
       }
    }
 
