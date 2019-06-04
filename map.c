@@ -371,6 +371,7 @@ chain_skip
 
       // Find chain
       int max_ref_dist = (slen - loc_list[n].span - gamma + 1 + max_indels);
+      ssize_t read_last = 0;
       for (size_t j = n+1; j < nloc; j++) {
 	 int gen_dist = ((ssize_t)loc_list[j].refpos - (ssize_t)loc_list[n].refpos);
 
@@ -379,7 +380,7 @@ chain_skip
 	    break;
 
 	 // Seed mislocation
-	 if (loc_list[n].span >= loc_list[j].span)
+	 if (loc_list[n].span >= loc_list[j].span || loc_list[j].span <= read_last)
 	    continue;
 
 	 // Compute distance between seeds
@@ -391,6 +392,7 @@ chain_skip
 
 	 // Append seed to chain
 	 push(loc_list[j].seed, &chain);
+	 read_last = loc_list[j].span;
 	 
 	 // Mark seed as consumed
 	 loc_list[j].minscore = -1;	 
