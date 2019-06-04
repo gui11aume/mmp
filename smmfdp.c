@@ -61,6 +61,7 @@ typedef struct seedp_t seedp_t;
 struct uN0_t {
    double u;
    size_t N0;
+   double lev;
 };
 
 struct seedp_t {
@@ -360,6 +361,7 @@ estimate_uN0
       double N0 = (L1+R1 + C[iter]*(L3+R3)) / 2.0;
       if (N0 < 1.0) N0 = 1.0;
 
+      // TODO: precompute some of this?
       double tmp = 2 * lgamma(N0+1) + (L1+R1) * log(mu) +
          (L2+R2) * log(1-mu) + (2*N0-L1-R1) * log(1-pow(1-mu,n)) -
          (lgamma(N0-L1+1) + lgamma(N0-R1+1));
@@ -374,11 +376,16 @@ estimate_uN0
 
    }
 
-   return (uN0_t) { best_mu, best_N0 };
+   size_t G = idx.chr->gsize;
+   double H0l = 2 * lgamma(G+1) + (L1+R1) * log(.75) +
+      (L2+R2) * log(.25) + (2*G-L1-R1) * log(1-pow(.25,n)) -
+      (lgamma(G-L1+1) + lgamma(G-R1+1));
+
+   return (uN0_t) { best_mu, best_N0, H0l-loglik };
 
 in_case_of_failure:
    // Return an impossible value.
-   return (uN0_t) { 0.0 / 0.0, -1 };
+   return (uN0_t) { 0. / 0., -1,  0. / 0.};
 
 }
 
@@ -409,124 +416,59 @@ quality
 )
 {
 
-   double poff;
-   double best_mu = .06;
-
    double slen = strlen(seq);
    // FIXME: assert is very weak (here only
    // to declare 'uN0' on stack).
    assert(slen < 250);
 
-   uN0_t uN0[50];
+   uN0_t uN0[50] = {{0}};
 
    // Assume the worst (many similar duplicates).
    const double worst_case_mu = 0.02;
    const size_t worst_case_N0 = 64000;
 
    int tot = 0;
+   double lev = 0;
    for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
+      if (aln.read_end < s+10 || aln.read_beg > s+19) {
+         // Estimate only at the site of the seed.
+         uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0, 0 };
+         continue;
+      }
       uN0[tot] = estimate_uN0(aln.refseq + s, idx);
-      // Case that estimation failed (e.g., because of "N").
+      lev += uN0[tot].lev;
       if (uN0[tot].u != uN0[tot].u) {
-         uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0 };
+         // In case estimation fails (e.g., because of "N").
+         uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0, 0 };
       }
    }
 
-   // Find min/max N0.
-   int minN0 = 64000;
-   int maxN0 = 0;
-   double minu = 1.0;
-   for (int i = 0 ; i < tot ; i++) {
-      if (uN0[i].N0 > maxN0) maxN0 = uN0[i].N0;
-      if (uN0[i].N0 < minN0) minN0 = uN0[i].N0;
-      if (uN0[i].u < minu) minu = uN0[i].u;
+   // Find min N0.
+   // TODO: test if the second lowest is better.
+   int imin = 0;
+   for (int i = 1 ; i < tot ; i++) {
+      if (uN0[i].N0 < uN0[imin].N0) imin = i;
    }
 
-   if (maxN0 < 10 * minN0 || maxN0 < 20) {
-      // All the estimates of N0 are similar. Take the median.
-      qsort(uN0, tot, sizeof(uN0_t), cmpN0);
+   int N0 = uN0[imin].N0;
+   double u = uN0[imin].u;
 
-      best_mu = uN0[tot/2].u;
-      double best_N0 = uN0[tot/2].N0;
-
-      poff = skip == 0 ?
-         auto_mem_seed_offp(slen, best_mu, best_N0) :
-         auto_skip_seed_offp(slen, skip, best_mu, best_N0);
-
+   double posterior = 1;
+   if (aln.score == 0) {
+      posterior = slen*PROB*pow(1-PROB,slen-1) *
+         (1 - pow(1 - u/3*pow(1-u, slen-1), N0));
    }
    else {
-      // The estimates vary a lot. Split the read.
-      // Find the cut point (use max SSE inter).
-      double s1 = log(uN0[0].N0);
-      double s2 = 0;
-      for (int i = 1 ; i < tot ; i++) { s2 += log(uN0[i].N0); }
-      int n1 = 1;
-      int n2 = tot-1;
-      double maxC = pow(s1,2)/n1 + pow(s2,2)/n2;
-      int bkpt = 0;
-      for (int i = 1 ; i < tot-1 ; i++) {
-         n1++;
-         n2--;
-         s1 += log(uN0[i].N0);
-         s2 -= log(uN0[i].N0);
-         double C = pow(s1,2)/n1 + pow(s2,2)/n2;
-         if (C > maxC) {
-            maxC = C;
-            bkpt = i;
-         }
-      }
-      // Split (take separate medians).
-      int tot1 = bkpt+1;
-      int tot2 = tot - tot1;
-      qsort(uN0, tot1, sizeof(uN0_t), cmpN0);
-      qsort(uN0 + tot1, tot2, sizeof(uN0_t), cmpN0);
-
-      double best_mu1 = uN0[tot1/2].u;
-      int best_N01 = uN0[tot1/2].N0;
-      double best_mu2 = uN0[tot1 + tot2/2].u;
-      int best_N02 = uN0[tot1 + tot2/2].N0;
-      
-      if (best_N01 < 10*best_N02 && best_N02 < 10*best_N01) {
-         // The read is fishy (possibly it has a repeat in the middle).
-         // Reduce the confidence by taking the max N0 on each
-         // segment instead.
-         best_mu1 = uN0[tot1-1].u;
-         best_N01 = uN0[tot1-1].N0;
-         best_mu2 = uN0[tot -1].u;
-         best_N02 = uN0[tot -1].N0;
-      }
-
-      double l1 = (tot % 2 == 0) ? 10 + 10*tot1 : 5  + 10*tot1;
-      double l2 = (tot % 2 == 0) ? 10 + 10*tot2 : 15 + 10*tot2;
-
-      double nada1;
-      double nada2;
-      double wrong1;
-      double wrong2;
-
-      if (skip == 0) {
-         nada1 = auto_mem_seed_nullp(l1, best_mu1, best_N01);
-         wrong1 = auto_mem_seed_offp(l1, best_mu1, best_N01);
-         nada2 = auto_mem_seed_nullp(l2, best_mu2, best_N02);
-         wrong2 = auto_mem_seed_offp(l2, best_mu2, best_N02);
-      }
-      else {
-         nada1 = auto_skip_seed_nullp(l1, skip, best_mu1, best_N01);
-         wrong1 = auto_skip_seed_offp(l1, skip, best_mu1, best_N01);
-         nada2 = auto_skip_seed_nullp(l2, skip, best_mu2, best_N02);
-         wrong2 = auto_skip_seed_offp(l2, skip, best_mu2, best_N02);
-      }
-
-      poff = nada1 * wrong2 + wrong1 * nada2 + wrong1 * wrong2;
-
+      double poff = skip == 0 ?
+         auto_mem_seed_offp(slen, u, N0) :
+         auto_skip_seed_offp(slen, skip, u, N0);
+      double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
+      double B = aln.score * log(u) + (slen-aln.score) * log(1-u);
+      posterior = poff / ( poff + exp(A-B)*(1-poff) );
    }
 
-   double A = aln.score * log(0.01) + (slen-aln.score) * log(0.99);
-   double B = aln.score * log(best_mu) + (slen-aln.score) * log(1-best_mu);
-   double posterior =
-      1.0 / ( 1.0 + exp(A + log(1-poff) - log(poff) - B) );
-
-   return posterior;
+   double p0 = .05 / (.05 + .95*exp(lev));
+   return p0 * posterior;
 
 }
 
