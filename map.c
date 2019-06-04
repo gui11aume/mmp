@@ -56,7 +56,7 @@ int           seed_by_span (const void * a, const void * b) {
    return sa->span < sb->span;
 };
 
-int           mem_by_start (const void * a, const void * b) {
+int           seed_by_start (const void * a, const void * b) {
    return (*(seed_t **)a)->beg > (*(seed_t **)b)->beg;
 };
 
@@ -222,7 +222,7 @@ nonoverlapping_mems
       exit_on_memory_error(chain);
 
       // 1. Sort MEMs by start position.
-      qsort(mems->ptr, mems->pos, sizeof(seed_t *), mem_by_start);
+      qsort(mems->ptr, mems->pos, sizeof(seed_t *), seed_by_start);
 
       // 2. Recursive call to mem group.
       recursive_mem_chain(mems, 0, 0, chain, &chain_stack);
@@ -314,6 +314,16 @@ chain_skip
  index_t    idx
 )
 {
+   // Get sorted seed positions.
+   ssize_t     b = slen - gamma;
+   size_t   nbeg = b/skip + 1 + (b%skip > 0);
+   size_t * sbeg = malloc(nbeg * sizeof(size_t));
+   exit_on_memory_error(sbeg);
+   for (ssize_t i = nbeg-1; i >= 0; i--) {
+      sbeg[i] = b;
+      b = max(b - skip, 0);
+   }
+   
    // Get all Suffix Arrays.
    size_t nloc = 0;
    for (size_t i = 0; i < seeds->pos; i++) {
@@ -345,28 +355,22 @@ chain_skip
    // Sort loci 
    qsort(loc_list, j, sizeof(align_t), seed_by_refpos);
 
-   // Seed gap for extra mismatches.
-   int mismatch_gap = gamma + (gamma/skip + gamma%skip > 0)*skip;
-   int max_indels = slen*(MAX_CHAIN_INDEL_RATE);
-   
-   // Chain/merge alignments
-   size_t nchain = 0;
-   int * chain_coverage = calloc(slen,sizeof(int));
-   exit_on_memory_error(chain_coverage);
+   // Chain alignment positions
+   int   max_indels = slen*(MAX_CHAIN_INDEL_RATE);
+   size_t    nchain = 0;
+   wstack_t * chain = stack_new(seeds->pos);
 
    for (size_t n = 0; n < nloc; n++) {
       // Skip consumed seeds
       if (loc_list[n].minscore == -1)
 	 continue;
 
-      // Flag coverage
-      memset(chain_coverage, 0, slen*sizeof(int));
-      for (int p = loc_list[n].seed->beg; p <= loc_list[n].seed->end; p++)
-	 chain_coverage[p] = 1;
-
-      int max_ref_dist = (slen - loc_list[n].span - gamma + 1 + max_indels);
+      // Append seed to chain
+      chain->pos = 0;
+      push(loc_list[n].seed, &chain);
 
       // Find chain
+      int max_ref_dist = (slen - loc_list[n].span - gamma + 1 + max_indels);
       for (size_t j = n+1; j < nloc; j++) {
 	 int gen_dist = ((ssize_t)loc_list[j].refpos - (ssize_t)loc_list[n].refpos);
 
@@ -381,39 +385,64 @@ chain_skip
 	 // Compute distance between seeds
 	 int read_dist = (ssize_t)loc_list[j].span - (ssize_t)loc_list[n].span;
 
-
 	 // Chain gap too big
 	 if (gen_dist > read_dist + max_indels || gen_dist < read_dist - max_indels)
 	    continue;
 
 	 // Append seed to chain
-	 for (int p = loc_list[j].seed->beg; p <= loc_list[j].seed->end; p++)
-	    chain_coverage[p] = 1;
-
+	 push(loc_list[j].seed, &chain);
+	 
 	 // Mark seed as consumed
 	 loc_list[j].minscore = -1;	 
       }
 
-      // Chain minimum score
-      int span = 0;
-      int gap = 0;
+      // Chain min score
+      size_t  gap = 0;
+      size_t  pos = 0;
+      size_t span = 0;
       int minscore = 0;
-      for (size_t p = 0; p < slen; p++) {
-	 if (chain_coverage[p] && !gap) {
-	    minscore += (gap + mismatch_gap - 1)/mismatch_gap; // int version of ceil(gap/mismatch_gap)
-	    gap = 0;
+      for (size_t i = 0; i < chain->pos; i++) {
+	 seed_t * s = (seed_t *)chain->ptr[i];
+	 // Gap found
+	 if (s->beg > gap) {
+	    // Set pos to first mismatched seed
+	    while (sbeg[pos] + gamma <= gap)
+	       pos++;
+	    // Kill minimum number of seeds to produce this gap
+	    while (sbeg[pos] < s->beg) {
+	       minscore++;
+	       // Skip overlapping seeds
+	       size_t seedend = sbeg[pos] + gamma;
+	       while (pos < nbeg && sbeg[pos] < s->beg && sbeg[pos] < seedend)
+		  pos++;
+	    }
+	    // Span
+	    span += gamma;
 	 } else {
-	    gap++;
+	    span += s->end - gap + 1;
 	 }
-	 span += chain_coverage[p];
+	 gap = s->end+1;
       }
-      minscore += gap > 0 + gap/mismatch_gap;
+
+      // Trailing gap
+      if (gap < slen) {
+	 while (sbeg[pos] + gamma <= gap)
+	    pos++;
+	 while (pos < nbeg) {
+	    minscore++;
+	    // Skip overlapping seeds
+	    size_t seedend = sbeg[pos] + gamma;
+	    while (pos < nbeg && sbeg[pos] < seedend)
+	       pos++;
+	 }
+      }
       
       // Create alignment
       loc_list[nchain++] = (align_t){loc_list[n].refpos, span, minscore, loc_list[n].seed};
    }
 
-   free(chain_coverage);
+   free(chain);
+   free(sbeg);
 
    loc_list = realloc(loc_list, nchain*sizeof(align_t));
    exit_on_memory_error(loc_list);
@@ -777,7 +806,7 @@ align
 
    // Bug control on skip seeds
    if (score < alignment.minscore) {
-      fprintf(stderr, "bug found: score (%d) < minscore (%d), alignment: %s\n", score, alignment.minscore, seq);
+      fprintf(stderr, "bug found: score (%d) < expected minscore (%d), sequence: %s\n", score, alignment.minscore, seq);
       exit(1);
    }
 }
