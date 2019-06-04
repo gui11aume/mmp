@@ -40,6 +40,6 @@ struct alnstack_t {
 };
 
 
-alnstack_t * mapread (const char *, const index_t, const size_t, const int);
+alnstack_t * mapread (const char *, const index_t, const size_t, const int, const int);
 
 #endif

@@ -526,13 +526,14 @@ batchmap
       }
 
       int skip = 0; // Try MEM seeding first.
+      int best_score = rlen;
       aln_t aln[2]  = {{0}};
 
       aln[0].score = aln[1].score = 9999;
 
       for (int redo = 0 ; redo < 2 ; redo++) {
 
-         alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip);
+         alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip, best_score);
          if (!alnstack) exit(EXIT_FAILURE);
 
          // Did not find anything.
@@ -548,6 +549,8 @@ batchmap
          aln[redo].refseq   = a.refseq;
 	 aln[redo].read_beg = a.read_beg;
 	 aln[redo].read_end = a.read_end;
+
+	 best_score = a.score;
 
 #ifdef NOQUAL
          // XXX This compiler directive will disappear XXX //

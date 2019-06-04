@@ -819,7 +819,8 @@ mapread
  const char    * seq,
  const index_t   idx,
  const size_t    gamma,
- const int       skip
+ const int       skip,
+ const int       max_mismatches
  )
 {
    size_t slen = strlen(seq);
@@ -843,7 +844,7 @@ mapread
    }
 
    // Chain and align seeds
-   int best_score = min(slen, MAX_ALIGN_MISMATCHES);
+   int best_score = min(max_mismatches, MAX_ALIGN_MISMATCHES);
    alnstack_t * best = alnstack_new(10);
 
    if (skip) {
