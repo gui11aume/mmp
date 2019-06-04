@@ -620,6 +620,7 @@ batchmap
 #endif
 
          // Free alignments
+	 for(size_t i = 0; i < alnstack->pos; i++) free(alnstack->aln[i].refseq);
          free(alnstack);
 
          // We are done if the quality is higher than 40

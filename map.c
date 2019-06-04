@@ -314,16 +314,6 @@ chain_skip
  index_t    idx
 )
 {
-   // Get sorted seed positions.
-   ssize_t     b = slen - gamma;
-   size_t   nbeg = b/skip + 1 + (b%skip > 0);
-   size_t * sbeg = malloc(nbeg * sizeof(size_t));
-   exit_on_memory_error(sbeg);
-   for (ssize_t i = nbeg-1; i >= 0; i--) {
-      sbeg[i] = b;
-      b = max(b - skip, 0);
-   }
-   
    // Get all Suffix Arrays.
    size_t nloc = 0;
    for (size_t i = 0; i < seeds->pos; i++) {
@@ -336,6 +326,16 @@ chain_skip
 
    if (nloc == 0)
       return (aligncd_t){0, NULL};
+
+   // Recompute seed positions
+   ssize_t     b = slen - gamma;
+   size_t   nbeg = b/skip + 1 + (b%skip > 0);
+   size_t * sbeg = malloc(nbeg * sizeof(size_t));
+   exit_on_memory_error(sbeg);
+   for (ssize_t i = nbeg-1; i >= 0; i--) {
+      sbeg[i] = b;
+      b = max(b - skip, 0);
+   }
 
    // Allocate all suffix array positions
    align_t * loc_list = malloc(nloc*sizeof(align_t));
@@ -836,6 +836,7 @@ mapread
 
    // Return if no seeds were found
    if (seeds->pos == 0) {
+      free(seeds);
       return alnstack_new(1);
    }
 
