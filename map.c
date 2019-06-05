@@ -622,18 +622,15 @@ skip_seeds
       }
 
       for ( ; mlen < gamma ; mpos--, mlen++) {
-	 if (NONALPHABET[(uint8_t)seq[mpos]]) {
-	    end = mpos - 1;
+	 if (NONALPHABET[(uint8_t)seq[mpos]])
 	    break;
-	 }
+
 	 int c = ENCODE[(uint8_t) seq[mpos]];
 	 range.bot = get_rank(idx.occ, c, range.bot - 1);
 	 range.top = get_rank(idx.occ, c, range.top) - 1;
 	 // Stop if no hits.
-	 if (range.top < range.bot) {
-	    end -= skip;
+	 if (range.top < range.bot)
 	    break;
-	 }
       }
 
       if (mlen == gamma) {
@@ -645,11 +642,12 @@ skip_seeds
 	 exit_on_memory_error(m);
 	 memcpy(m, &seed, sizeof(seed_t));
 	 push(m, &seeds);
-	 // Update end position
-	 end -= skip;
-	 if (end < gamma - 1 && end > gamma - 1 - skip)
-	    end = gamma - 1;
       }
+
+      // Update end position
+      end -= skip;
+      if (end < gamma - 1 && end > gamma - 1 - skip)
+	 end = gamma - 1;
    }
 
    return seeds;
@@ -851,6 +849,7 @@ mapread
       aligncd_t alignments = chain_skip(slen, gamma, skip, seeds, idx);
       for (size_t j = 0; j < alignments.cnt; j++) {
 	 align_t alignment = alignments.align[j];
+
 	 // Do not align chained alncd.
 	 if (alignment.minscore > best_score || (alignment.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
 	    if (DEBUG_VERBOSE)
