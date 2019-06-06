@@ -420,12 +420,13 @@ quality
    // FIXME: assert is very weak (here only
    // to declare 'uN0' on stack).
    assert(slen < 250);
+   assert(slen >= GAMMA);
 
    uN0_t uN0[50] = {{0}};
 
    // Assume the worst (many similar duplicates).
    const double worst_case_mu = 0.02;
-   const size_t worst_case_N0 = 64000;
+   const size_t worst_case_N0 = 2147483645;
 
    int tot = 0;
    double lev = 0;
@@ -443,32 +444,69 @@ quality
       }
    }
 
-   // Find min N0.
-   // TODO: test if the second lowest is better.
-   int imin = 0;
-   for (int i = 1 ; i < tot ; i++) {
-      if (uN0[i].N0 < uN0[imin].N0) imin = i;
+   // Pick the largest value of N0.
+   qsort(uN0, tot, sizeof(uN0_t), cmpN0);
+   int imax = tot-1;
+   for ( ; imax > 0 ; imax--) {
+      if (uN0[imax].N0 < worst_case_N0) break;
    }
 
-   int N0 = uN0[imin].N0;
-   double u = uN0[imin].u;
+   int N0 = uN0[imax].N0;
+   double u = uN0[imax].u;
 
-   double posterior = 1;
+   double p0 = 1. / (1. + exp(lev));
+   double poff = skip == 0 ?
+      auto_mem_seed_offp(slen, u, N0) :
+      auto_skip_seed_offp(slen, skip, u, N0);
+
    if (aln.score == 0) {
-      posterior = slen*PROB*pow(1-PROB,slen-1) *
-         (1 - pow(1 - u/3*pow(1-u, slen-1), N0));
+      // In this case, we are wrong if the best hit is
+      // not the right one. Use special formulas.
+      if (p0 < .5) {
+         // Those are the "super reads". Separate even vs odd.
+         if (tot % 2 == 1) {
+            return pow(11*PROB,tot-1)*pow(1-PROB,slen-tot+1) *
+               pow(u/3,tot-1) * pow(1-u,slen-tot+1);
+         }
+         else {
+            return 2*11*pow(PROB,tot-2)*pow(1-PROB,slen-tot+2) *
+               pow(u/3,tot-2) * pow(1-u,slen-tot+2);
+         }
+      }
+      else {
+         double pswap = 1 - pow(1 - u/3*pow(1-u, slen-1), N0);
+         return slen * PROB * pow(1-PROB, slen-1) * pswap;
+      }
    }
    else {
-      double poff = skip == 0 ?
-         auto_mem_seed_offp(slen, u, N0) :
-         auto_skip_seed_offp(slen, skip, u, N0);
-      double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
-      double B = aln.score * log(u) + (slen-aln.score) * log(1-u);
-      posterior = poff / ( poff + exp(A-B)*(1-poff) );
+      // Count only the evidence from the nucleotides that were
+      // actually aligned (those in the seed are already taken
+      // into account in the Sesame prior probability). For MEM,
+      // count one obligatory error because of the end of the seed.
+      // For skip seeds, consider that only one seed was used to
+      // discover the locus.
+      ssize_t nerr = skip == 0 ? aln.score-1 : aln.score;
+      ssize_t naln = skip == 0 ?
+         slen - aln.read_end + aln.read_beg - 2 : slen-GAMMA;
+
+      // Weight of the evidence if mapping is correct...
+      double A = nerr * log(PROB) + (naln-nerr) * log(1-PROB);
+      // ... if mapping is on a duplicate...
+      double B = nerr * log(u)    + (naln-nerr) * log(1-u);
+      // ... and if mapping is random.
+      double C = aln.score * log(.75)  + (slen-aln.score) * log(.25);
+
+      // Here 'term2' uses non-informative prios instead of Sesame
+      // priors for the sake of simplicity. In practice, 'term2' is
+      // either very close to 0 or very close to 1 and the priors
+      // do not matter.
+      double term1 = p0 * poff / ( poff + exp(A-B)*(1-poff) );
+      double term2 = 1. / (1. + exp(A-C));
+
+      return term1 + term2 > 1. ? 1. : term1 + term2;
+
    }
 
-   double p0 = .05 / (.05 + .95*exp(lev));
-   return p0 * posterior;
 
 }
 
@@ -547,10 +585,10 @@ batchmap
          aln[redo].score    = a.score;
          aln[redo].refpos   = a.refpos;
          aln[redo].refseq   = a.refseq;
-	 aln[redo].read_beg = a.read_beg;
-	 aln[redo].read_end = a.read_end;
+         aln[redo].read_beg = a.read_beg;
+         aln[redo].read_end = a.read_end;
 
-	 best_score = a.score;
+         best_score = a.score;
 
 #ifdef NOQUAL
          // XXX This compiler directive will disappear XXX //
@@ -565,12 +603,14 @@ batchmap
 #endif
 
          // Free alignments
-	 for(size_t i = 0; i < alnstack->pos; i++) free(alnstack->aln[i].refseq);
+         for(size_t i = 0; i < alnstack->pos; i++)
+            free(alnstack->aln[i].refseq);
          free(alnstack);
 
          // We are done if the quality is higher than 40
          // (good case) or lower than 20 (hopeless).
-         if (aln[0].score == 0 || aln[0].qual < 1e-4 || aln[0].qual > 1e-2) break;
+         if (aln[0].score == 0 || aln[0].qual < 1e-4 || aln[0].qual > 1e-2)
+            break;
 
          // Otherwise try skip seeds
          skip = 8;
