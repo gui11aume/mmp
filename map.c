@@ -356,7 +356,7 @@ chain_skip
    qsort(loc_list, j, sizeof(align_t), seed_by_refpos);
 
    // Chain alignment positions
-   int   max_indels = slen*(MAX_CHAIN_INDEL_RATE);
+   int   max_indels = min(skip-1, slen*(MAX_CHAIN_INDEL_RATE));
    size_t    nchain = 0;
    wstack_t * chain = stack_new(seeds->pos);
 
