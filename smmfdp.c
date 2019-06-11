@@ -9,6 +9,7 @@
 
 #define GAMMA 17
 #define PROBDEFAULT 0.01
+#define SKIPQUALDEFAULT 40
 
 // Index parameters
 #define OCC_INTERVAL_SIZE 8
@@ -70,6 +71,16 @@ struct seedp_t {
 };
 
 static double PROB = PROBDEFAULT;
+static double SKIPQUAL = SKIPQUALDEFAULT;
+
+char* HELP_MSG =
+   "usage: smmfdp ([-e 0.01] [-q 40] index-file file.fasta | --index index-file)\n"
+   "\n"
+   "mapping options:\n"
+   "  -e  sets the expected error rate (default: 0.01)\n"
+   "  -q  sets the threshold quality to use skip seeds (default 40)\n"
+   "\n";
+   
 
 void
 build_index
@@ -527,7 +538,10 @@ batchmap
    FILE * inputf = fopen(readsfname, "r");
    if (inputf == NULL) exit_cannot_open(readsfname);
 
-
+#ifdef DEBUG
+   fprintf(stdout, "smmfdp: index=%s, reads=%s, perror=%f, skip-thr=%f\n", indexfname, readsfname, PROB, SKIPQUAL);
+#endif
+   
    size_t sz = 64;
    ssize_t rlen;
    char * seq = malloc(64);
@@ -609,7 +623,7 @@ batchmap
 
          // We are done if the quality is higher than 40
          // (good case) or lower than 20 (hopeless).
-         if (aln[0].score == 0 || aln[0].qual < 1e-4 || aln[0].qual > 1e-2)
+         if (aln[0].score == 0 || -10*log(aln[0].qual) >= SKIPQUAL)
             break;
 
          // Otherwise try skip seeds
@@ -664,7 +678,9 @@ main
       exit(EXIT_FAILURE);
    }
 
-   if (strcmp(argv[1], "--index") == 0) {
+   if (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")) {
+      fprintf(stdout, "%s", HELP_MSG);
+   } else if (strcmp(argv[1], "--index") == 0) {
       if (argc < 3) {
          fprintf(stderr, "Specify file to index.\n");
          exit(EXIT_FAILURE);
@@ -673,17 +689,42 @@ main
    }
    else {
       if (argc < 3) {
-         fprintf(stderr, "Specify index and read file.\n");
+         fprintf(stderr, "error: not enough arguments.\n");
+	 fprintf(stderr, "%s", HELP_MSG);
          exit(EXIT_FAILURE);
       }
-      // Argument 5 is sequencing error.
-      if (argc == 4) {
-         PROB = strtod(argv[3], NULL);
-         if (PROB <= 0 || PROB >= 1) {
-            fprintf(stderr, "Sequencing error must be in (0,1).\n");
-            exit(EXIT_FAILURE);
-         }
+
+      char * index_path = NULL;
+      char * reads_path = NULL;
+
+      for (int i = 1; i < argc; i++) {
+	 if (argv[i][0] == '-') {
+	    if (argv[i][1] == 'q') {
+	       SKIPQUAL = strtod(argv[++i], NULL);
+	    } else if (argv[i][1] == 'e') {
+	       PROB = strtod(argv[++i], NULL);
+	       if (PROB <= 0 || PROB >= 1) {
+		  fprintf(stderr, "Sequencing error must be in (0,1).\n");
+		  exit(EXIT_FAILURE);
+	       }
+	    }
+	 } else {
+	    if (!index_path) index_path = argv[i];
+	    else if (!reads_path) reads_path = argv[i];
+	    else {
+	       fprintf(stderr, "error: too many arguments.\n");
+	       fprintf(stderr, "%s", HELP_MSG);
+	       exit(EXIT_FAILURE);
+	    }
+	 }
       }
-      batchmap(argv[1], argv[2]);
+
+      if (!index_path || !reads_path) {
+         fprintf(stderr, "error: not enough arguments.\n");
+	 fprintf(stderr, "%s", HELP_MSG);
+         exit(EXIT_FAILURE);
+      }
+      
+      batchmap(index_path, reads_path);
    }
 }
