@@ -613,7 +613,7 @@ batchmap
             break;
 
          // Otherwise try skip seeds
-         skip = 8;
+         skip = 12;
 
       }
 
