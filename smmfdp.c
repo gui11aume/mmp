@@ -9,7 +9,7 @@
 
 #define GAMMA 17
 #define PROBDEFAULT 0.01
-#define SKIPQUALDEFAULT 40
+#define SKIPQUALDEFAULT 10
 
 // Index parameters
 #define OCC_INTERVAL_SIZE 8
@@ -74,11 +74,11 @@ static double PROB = PROBDEFAULT;
 static double SKIPQUAL = SKIPQUALDEFAULT;
 
 char* HELP_MSG =
-   "usage: smmfdp ([-e 0.01] [-q 40] index-file file.fasta | --index index-file)\n"
+   "usage: smmfdp ([-e 0.01] [-q 10] index-file file.fasta | --index index-file)\n"
    "\n"
    "mapping options:\n"
    "  -e  sets the expected error rate (default: 0.01)\n"
-   "  -q  sets the threshold quality to use skip seeds (default 40)\n"
+   "  -q  sets the threshold qual1ty to use skip seeds (default 10)\n"
    "\n";
    
 
@@ -466,55 +466,67 @@ quality
    double u = uN0[imax].u;
 
    double p0 = 1. / (1. + exp(lev));
-   double poff = skip == 0 ?
-      auto_mem_seed_offp(slen, u, N0) :
-      auto_skip_seed_offp(slen, skip, u, N0);
 
-   if (aln.score == 0) {
-      // In this case, we are wrong if the best hit is
-      // not the right one. Use special formulas.
+   // Probability that the true location is not the best.
+   int m = aln.score + 1;
+   double pm = exp(lgamma(slen+1)-lgamma(m+1)-lgamma(slen-m+1) +
+      m*log(PROB) + (slen-m)*log(1-PROB));
+   double pswap = 1 - pow(1 - pow(u/3,m) * pow(1-u,slen-m), N0);
+   double ptrue_not_best = pm * pswap;
+
+   ssize_t nerr = skip == 0 ? aln.score-1 : aln.score;
+   ssize_t naln = skip == 0 ?
+      slen - aln.read_end + aln.read_beg - 2 : slen-GAMMA;
+
+   if (aln.score == 0 || (aln.score == 1 && naln == 0)) {
+      // Perfect score or error on the flank.
       if (p0 < .5) {
          // Those are the "super reads". Separate even vs odd.
+         double len = slen - aln.score;
          if (tot % 2 == 1) {
-            return pow(11*PROB,tot-1)*pow(1-PROB,slen-tot+1) *
-               pow(u/3,tot-1) * pow(1-u,slen-tot+1);
+            return pow(11*PROB,tot-1)*pow(1-PROB,len-tot+1) *
+               pow(u/3,tot-1) * pow(1-u,len-tot+1);
          }
          else {
-            return 2*11*pow(PROB,tot-2)*pow(1-PROB,slen-tot+2) *
-               pow(u/3,tot-2) * pow(1-u,slen-tot+2);
+            return 2*11*pow(PROB,tot-2)*pow(1-PROB,len-tot+2) *
+               pow(u/3,tot-2) * pow(1-u,len-tot+2);
          }
       }
-      else {
-         double pswap = 1 - pow(1 - u/3*pow(1-u, slen-1), N0);
-         return slen * PROB * pow(1-PROB, slen-1) * pswap;
-      }
+   }
+   if (aln.score == 0) {
+      // Not a super read, but since the score is 0, the
+      // only way to be wrong is that the true location is
+      // not the best.
+      return p0 * ptrue_not_best;
    }
    else {
+      double poff = skip == 0 ?
+         auto_mem_seed_offp(slen, u, N0) :
+         auto_skip_seed_offp(slen, skip, u, N0);
       // Count only the evidence from the nucleotides that were
       // actually aligned (those in the seed are already taken
       // into account in the Sesame prior probability). For MEM,
       // count one obligatory error because of the end of the seed.
       // For skip seeds, consider that only one seed was used to
       // discover the locus.
-      ssize_t nerr = skip == 0 ? aln.score-1 : aln.score;
-      ssize_t naln = skip == 0 ?
-         slen - aln.read_end + aln.read_beg - 2 : slen-GAMMA;
 
       // Weight of the evidence if mapping is correct...
       double A = nerr * log(PROB) + (naln-nerr) * log(1-PROB);
       // ... if mapping is on a duplicate...
-      double B = nerr * log(u)    + (naln-nerr) * log(1-u);
+      double PU = PROB + u - 4*PROB*u/3;
+      double B = nerr * log(PU)   + (naln-nerr) * log(1-PU);
       // ... and if mapping is random.
       double C = aln.score * log(.75)  + (slen-aln.score) * log(.25);
 
-      // Here 'term2' uses non-informative prios instead of Sesame
-      // priors for the sake of simplicity. In practice, 'term2' is
+      // Here 'term3' uses non-informative prios instead of Sesame
+      // priors for the sake of simplicity. In practice, 'term3' is
       // either very close to 0 or very close to 1 and the priors
       // do not matter.
       double term1 = p0 * poff / ( poff + exp(A-B)*(1-poff) );
-      double term2 = 1. / (1. + exp(A-C));
+      double term2 = p0 * ptrue_not_best;
+      double term3 = 1. / (1. + exp(A-C));
 
-      return term1 + term2 > 1. ? 1. : term1 + term2;
+      return term1 + term2 + term3 > 1. ? 1. : term1 + term2 + term3;
 
    }
 
@@ -604,26 +616,20 @@ batchmap
 
          best_score = a.score;
 
-#ifdef NOQUAL
-         // XXX This compiler directive will disappear XXX //
-         // XXX when releasing the real code.          XXX //
-         aln[redo].qual = 1.0;
-#else
          // In case of ties, the quality is the
          // probability of choosing the right one.
+         // XXX This is incorect with 0 error XXX //
          aln[redo].qual = alnstack->pos > 1 ?
             1.0 - 1.0 / alnstack->pos :
             quality(aln[redo], seq, idx, skip);
-#endif
 
          // Free alignments
          for(size_t i = 0; i < alnstack->pos; i++)
             free(alnstack->aln[i].refseq);
          free(alnstack);
 
-         // We are done if the quality is higher than 40
-         // (good case) or lower than 20 (hopeless).
-         if (aln[0].score == 0 || -10*log(aln[0].qual) >= SKIPQUAL)
+         // We are done if the quality is higher than 'SKIPQUAL'.
+         if (aln[0].score == 0 || 10*log(aln[0].qual)/log(.1) >= SKIPQUAL)
             break;
 
          // Otherwise try skip seeds
