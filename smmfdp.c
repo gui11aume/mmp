@@ -474,32 +474,49 @@ quality
    double pswap = 1 - pow(1 - pow(u/3,m) * pow(1-u,slen-m), N0);
    double ptrue_not_best = pm * pswap;
 
-   ssize_t nerr = skip == 0 ? aln.score-1 : aln.score;
+   ssize_t nerr = skip == 0 ?
+      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
+         aln.score-1 : aln.score-2) : aln.score;
    ssize_t naln = skip == 0 ?
-      slen - aln.read_end + aln.read_beg - 2 : slen-GAMMA;
+      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
+          slen - aln.read_end + aln.read_beg - 2 :
+          slen - aln.read_end + aln.read_beg - 3) : slen-GAMMA;
 
    if (aln.score == 0 || (aln.score == 1 && naln == 0)) {
-      // Perfect score or error on the flank.
+      // Perfect score or error on the flank. Also condition
+      // on the probability that the read has no error or one
+      // error on the flank.
       if (p0 < .5) {
-         // Those are the "super reads". Separate even vs odd.
-         double len = slen - aln.score;
+         // Special correction for error on the flank.
+         double x = aln.score == 0 ? 1 : 2*PROB;
+         // Those are the "super reads". Separate odd vs even.
+         // We estimate that 0.3 is the fraction of sites with
+         // exactly 1 duplicate.
          if (tot % 2 == 1) {
-            return pow(11*PROB,tot-1)*pow(1-PROB,len-tot+1) *
-               pow(u/3,tot-1) * pow(1-u,len-tot+1);
+            return pow(11*PROB,tot-1) / pow(1-PROB,tot-1) *
+               pow(u/3,tot-1)*pow(1-u,slen-tot+1) * .3 / x;
          }
          else {
-            return 2*11*pow(PROB,tot-2)*pow(1-PROB,len-tot+2) *
-               pow(u/3,tot-2) * pow(1-u,len-tot+2);
+            return 2*11*pow(PROB,tot-2) / pow(1-PROB,tot-2) *
+               pow(u/3,tot-2)*pow(1-u,slen-tot+2) * .3 / x;
          }
       }
    }
    if (aln.score == 0) {
       // Not a super read, but since the score is 0, the
       // only way to be wrong is that the true location is
-      // not the best.
-      return p0 * ptrue_not_best;
+      // not the best. Also condition by the probability
+      // that the read has no error.
+      double cond = pow(1-PROB, slen);
+      double prob = p0 * ptrue_not_best / cond;
+      return prob > 1 ? 1 : prob;
    }
    else {
+      // Condition by the probability that the read has at
+      // the given number of errors.
+      double cond = exp(lgamma(slen+1) -lgamma(aln.score+1)
+         -lgamma(slen-aln.score+1) +
+         aln.score*log(PROB) + (slen-aln.score)*log(1-PROB));
       double poff = skip == 0 ?
          auto_mem_seed_offp(slen, u, N0) :
          auto_skip_seed_offp(slen, skip, u, N0);
@@ -513,18 +530,18 @@ quality
       // Weight of the evidence if mapping is correct...
       double A = nerr * log(PROB) + (naln-nerr) * log(1-PROB);
       // ... if mapping is on a duplicate...
-      double PU = PROB + u - 4*PROB*u/3;
+      double PU = PROB + u;
       double B = nerr * log(PU)   + (naln-nerr) * log(1-PU);
       // ... and if mapping is random.
-      double C = aln.score * log(.75)  + (slen-aln.score) * log(.25);
+      double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
 
       // Here 'term3' uses non-informative prios instead of Sesame
       // priors for the sake of simplicity. In practice, 'term3' is
       // either very close to 0 or very close to 1 and the priors
       // do not matter.
       double term1 = p0 * poff / ( poff + exp(A-B)*(1-poff) );
-      double term2 = p0 * ptrue_not_best;
-      double term3 = 1. / (1. + exp(A-C));
+      double term2 = p0 * ptrue_not_best / cond;
+      double term3 = aln.score < slen / 5 ? 0 : 1. / (1. + exp(A-C));
 
       return term1 + term2 + term3 > 1. ? 1. : term1 + term2 + term3;
 
@@ -628,8 +645,10 @@ batchmap
             free(alnstack->aln[i].refseq);
          free(alnstack);
 
-         // We are done if the quality is higher than 'SKIPQUAL'.
-         if (aln[0].score == 0 || 10*log(aln[0].qual)/log(.1) >= SKIPQUAL)
+         // We are done if we found a perfect hit or
+         // if the quality is higher than 'SKIPQUAL'.
+         // (-4.34 = -10/log(10) amounts to taking log10).
+         if (aln[0].score == 0 || -4.34*log(aln[0].qual) >= SKIPQUAL)
             break;
 
          // Otherwise try skip seeds
@@ -642,13 +661,18 @@ batchmap
          // Nothing found.
          fprintf(stdout, "%s\tNA\tNA\n", seq);
       }
-      else if (aln[0].score < aln[1].score) {
-         // Use MEM alignment.
+      else if (
+            (aln[0].score <  aln[1].score) ||
+            (aln[0].score == aln[1].score && aln[0].qual < .5)) {
+         // Use MEM alignment if better than skip seed alignment,
+         // or if equally good and has discovered several equally
+         // good hits in the genome.
          char * apos = chr_string(aln[0].refpos, idx.chr);
          fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[0].qual);
          free(apos);
-      } else {
-         // Use skip alignment.
+      }
+      else {
+         // did not miss anything important.
          char * apos = chr_string(aln[1].refpos, idx.chr);
          fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[1].qual);
          free(apos);
