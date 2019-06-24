@@ -30,13 +30,6 @@ struct seedchain_t {
    seed_t  * seed[];
 };
 
-struct align_t {
-   size_t    refpos;
-   size_t    span;
-   int       minscore;
-   seed_t  * seed;
-};
-
 struct aligncd_t {
    size_t     cnt;
    align_t  * align;
@@ -44,7 +37,6 @@ struct aligncd_t {
 
 seedchain_t * seedchain_new (size_t max);
 void          seed_push     (seed_t * mem, seedchain_t ** stackp);
-alnstack_t *  alnstack_new (size_t max);
 void          aln_push     (aln_t aln, alnstack_t ** stackp);
 
 int           seed_by_refpos (const void * a, const void * b) {
@@ -821,6 +813,7 @@ mapread
  const int       max_mismatches
  )
 {
+
    size_t slen = strlen(seq);
 
    if (DEBUG_VERBOSE) {

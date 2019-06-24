@@ -550,6 +550,72 @@ quality
 
 }
 
+aln_t
+mapfrag
+(
+   const char    * seq,
+         index_t   idx
+)
+// Processes read fragments of length at most 50.
+{
+
+   int skip = 0; // Try MEM seeding first.
+   int best_score = 50;
+   aln_t aln[2]  = {{0}};
+
+   aln[0].score = aln[1].score = 9999;
+
+   for (int redo = 0 ; redo < 2 ; redo++) {
+
+      alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip, best_score);
+      if (!alnstack) exit(EXIT_FAILURE);
+
+      // Did not find anything.
+      if (alnstack->pos == 0) {
+         free(alnstack);
+         break;
+      }
+
+      // Pick first top alignment.
+      aln_t a = alnstack->aln[0];
+      aln[redo].score    = a.score;
+      aln[redo].refpos   = a.refpos;
+      aln[redo].refseq   = a.refseq;
+      aln[redo].read_beg = a.read_beg;
+      aln[redo].read_end = a.read_end;
+
+      best_score = a.score;
+
+      aln[redo].qual = alnstack->pos > 1 ?
+         1.0 - 1.0 / alnstack->pos :
+         quality(aln[redo], seq, idx, skip);
+
+      // Free alignments
+      for(size_t i = 0; i < alnstack->pos; i++)
+         free(alnstack->aln[i].refseq);
+      free(alnstack);
+
+      // We are done if we found a perfect hit or
+      // if the quality is higher than 'SKIPQUAL'.
+      // (-4.34 = -10/log(10) amounts to taking log10).
+      if (aln[0].score == 0 || -4.34*log(aln[0].qual) >= SKIPQUAL)
+         break;
+
+      // Otherwise try skip seeds
+      skip = 12;
+
+   }
+
+   // Use MEM alignment if better than skip seed alignment,
+   // or if equally good and has discovered several equally
+   // good hits in the genome.
+   int MEM_is_best = aln[0].score < aln[1].score;
+   int no_improvement = aln[0].score == aln[1].score && aln[0].qual < .5;
+
+   return (MEM_is_best || no_improvement) ? aln[0] : aln[1];
+
+}
+
 
 void
 batchmap
@@ -568,15 +634,17 @@ batchmap
    if (inputf == NULL) exit_cannot_open(readsfname);
 
 #ifdef DEBUG
-   fprintf(stdout, "smmfdp: index=%s, reads=%s, perror=%f, skip-thr=%f\n", indexfname, readsfname, PROB, SKIPQUAL);
+   fprintf(stdout, "smmfdp: index=%s, reads=%s, perror=%f, skip-thr=%f\n",
+         indexfname, readsfname, PROB, SKIPQUAL);
 #endif
    
+   alnstack_t *best = alnstack_new(10);
+
    size_t sz = 64;
    ssize_t rlen;
    char * seq = malloc(64);
    exit_error(seq == NULL);
 
-   size_t counter = 0; // Used for randomizing.
    size_t maxlen = 0; // Max 'k' value for seeding probabilities.
 
    // Read sequence file line by line.
@@ -587,97 +655,101 @@ batchmap
 
       // If fasta header, print sequence name.
 
-// XXX BENCHMARK STUFF XXX //
-#ifdef FASTOUT
-      if (seq[0] == '>') {
-         fprintf(stdout, ">%s\n", seq+1);
-         continue;
-      }
-#else
       if (seq[0] == '>') {
          fprintf(stdout, "%s\t", seq+1);
          continue;
       }
-#endif
 
+      rlen = strlen(seq);
       if (rlen > maxlen) {
          maxlen = rlen;
          // (Re)initialize library.
          sesame_set_static_params(GAMMA, rlen, PROB);
       }
 
-      int skip = 0; // Try MEM seeding first.
-      int best_score = rlen;
-      aln_t aln[2]  = {{0}};
+      if (rlen <= 50) {
+         aln_t aln = mapfrag(seq, idx);
 
-      aln[0].score = aln[1].score = 9999;
-
-      for (int redo = 0 ; redo < 2 ; redo++) {
-
-         alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip, best_score);
-         if (!alnstack) exit(EXIT_FAILURE);
-
-         // Did not find anything.
-         if (alnstack->pos == 0) {
-            free(alnstack);
-            break;
+         if (aln.score >= 9999) {
+            // Nothing found.
+            fprintf(stdout, "%s\tNA\tNA\n", seq);
          }
-
-         // Pick a top alignment at "random".
-         aln_t a = alnstack->aln[counter++ % alnstack->pos];
-         aln[redo].score    = a.score;
-         aln[redo].refpos   = a.refpos;
-         aln[redo].refseq   = a.refseq;
-         aln[redo].read_beg = a.read_beg;
-         aln[redo].read_end = a.read_end;
-
-         best_score = a.score;
-
-         // In case of ties, the quality is the
-         // probability of choosing the right one.
-         // XXX This is incorect with 0 error XXX //
-         aln[redo].qual = alnstack->pos > 1 ?
-            1.0 - 1.0 / alnstack->pos :
-            quality(aln[redo], seq, idx, skip);
-
-         // Free alignments
-         for(size_t i = 0; i < alnstack->pos; i++)
-            free(alnstack->aln[i].refseq);
-         free(alnstack);
-
-         // We are done if we found a perfect hit or
-         // if the quality is higher than 'SKIPQUAL'.
-         // (-4.34 = -10/log(10) amounts to taking log10).
-         if (aln[0].score == 0 || -4.34*log(aln[0].qual) >= SKIPQUAL)
-            break;
-
-         // Otherwise try skip seeds
-         skip = 12;
-
-      }
-
-      // Report mapping results
-      if (aln[0].score >= 9999 && aln[1].score >= 9999) {
-         // Nothing found.
-         fprintf(stdout, "%s\tNA\tNA\n", seq);
-      }
-      else if (
-            (aln[0].score <  aln[1].score) ||
-            (aln[0].score == aln[1].score && aln[0].qual < .5)) {
-         // Use MEM alignment if better than skip seed alignment,
-         // or if equally good and has discovered several equally
-         // good hits in the genome.
-         char * apos = chr_string(aln[0].refpos, idx.chr);
-         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[0].qual);
-         free(apos);
+         else {
+            char *apos = chr_string(aln.refpos, idx.chr);
+            fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln.qual);
+            free(apos);
+         }
       }
       else {
-         // did not miss anything important.
-         char * apos = chr_string(aln[1].refpos, idx.chr);
-         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[1].qual);
+         // Cut the read in fragments.
+         int nfrags = 1 + (rlen-1) / 50;
+         double span = rlen / 50.0 - 1.0;
+         aln_t alns[5]= {0};
+         char frag[51] = {0};
+         for (int i = 0 ; i < nfrags ; i++) {
+            int shift = span * 50 * i;
+            strncpy(frag, seq + shift, 50);
+            alns[i] = mapfrag(frag, idx);
+         }
+
+         // Pick the best.
+         int iopt = 0;
+         aln_t aln = alns[iopt];
+         for (int i = 1 ; i < nfrags ; i++) {
+            if (alns[i].qual < aln.qual) {
+               aln = alns[i];
+               iopt = i;
+            }
+         }
+
+         if (aln.score >= 9999) {
+            // Nothing found.
+            fprintf(stdout, "%s\tNA\tNA\n", seq);
+            continue;
+         }
+
+         // Find agreement among fragments.
+         for (int i = 0 ; i < nfrags ; i++) {
+            if (i == iopt) continue;
+            if (abs(alns[i].refpos - aln.refpos) < rlen) {
+               aln.qual *= alns[i].qual;
+            }
+         }
+
+         // Output.
+         char *apos = chr_string(aln.refpos, idx.chr);
+         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln.qual);
          free(apos);
+
+#if 0
+// This code can be used if one wants to know the alignment
+// score of the read at the candidate location.
+
+         // Re-align to get new score.
+         seed_t seed = {
+            .beg = aln.read_beg,
+            .end = aln.read_end,
+         };
+         align_t a = {
+            .refpos = aln.refpos - 50*iopt,
+            .span = rlen,
+            .minscore = 0,
+            .seed = &seed,
+         };
+
+         int best_score = 9999;
+         align(a, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
+
+         char *apos = chr_string(a.refpos, idx.chr);
+         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln.qual);
+         free(apos);
+#endif
+
       }
+
    }
+
+   free(best);
 
    fclose(inputf);
    free_index_chr(idx.chr);

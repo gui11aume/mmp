@@ -14,6 +14,7 @@
 
 typedef struct alnstack_t alnstack_t;
 typedef struct aln_t      aln_t;
+typedef struct align_t    align_t;
 typedef struct seed_t     seed_t;
 
 struct seed_t {
@@ -33,6 +34,13 @@ struct aln_t {
    double   qual;
 };
 
+struct align_t {
+   size_t    refpos;
+   size_t    span;
+   int       minscore;
+   seed_t  * seed;
+};
+
 struct alnstack_t {
          size_t pos;
          size_t max;
@@ -41,5 +49,7 @@ struct alnstack_t {
 
 
 alnstack_t * mapread (const char *, const index_t, const size_t, const int, const int);
+alnstack_t * alnstack_new (size_t max);
+void align (align_t , const char*, char *, size_t , int *, alnstack_t **);
 
 #endif
