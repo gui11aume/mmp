@@ -21,6 +21,8 @@ int DEBUG_VERBOSE = 0;
 #define min(x,y) ((x) < (y) ? (x) : (y))
 #define min3(x,y,z) (min(min(x,y),z))
 
+static ssize_t circ_num = 0;
+
 struct seedchain_t {
    size_t    pos;
    size_t    max;
@@ -906,7 +908,9 @@ mapread
 	 mem->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, mem->range);
 
 	 // Align at each locus.
-	 for (int k = 0; k < mem->range.top - mem->range.bot + 1; k++) {
+	 ssize_t nloci = mem->range.top - mem->range.bot + 1;
+	 for (ssize_t v = 0; v < nloci; v++) {
+	    ssize_t k = (v+circ_num)%nloci;
 	    align_t alignment = (align_t){mem->sa[k], mem->end - mem->beg + 1, minscore, mem};
 	    if (DEBUG_VERBOSE) {
 	       char * strpos  = chr_string(alignment.refpos, idx.chr);
@@ -920,6 +924,7 @@ mapread
 	    if (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
 	       break;
 	 }
+	 circ_num++;
       }
 
       // Check if best alignment is 100% unique
