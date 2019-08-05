@@ -643,11 +643,15 @@ query_csa_range
  range_t  range
  )
 {
-
-   size_t * sa_values = calloc((range.top - range.bot + 1), sizeof(size_t));
+   ssize_t nloc = range.top - range.bot + 1;
+   size_t * sa_values = calloc(nloc, sizeof(size_t));
    exit_on_memory_error(sa_values);
 
-   recursive_csa_query(csa, bwt, occ, range, sa_values, 0);
+   if (nloc > 1) {
+      recursive_csa_query(csa, bwt, occ, range, sa_values, 0);
+   } else {
+      sa_values[0] = query_csa(csa, bwt, occ, range.top);
+   }
 
    return sa_values;
 }
