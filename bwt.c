@@ -537,6 +537,10 @@ recursive_csa_query
  size_t   path_offset
  )
 {
+   // Beginning of reference
+   if (range.bot <= bwt->zero && range.top >= bwt->zero) {
+      sa_values[bwt->zero - range.bot] = path_offset;
+   }
    // Get sampled SA values.
    // Compute offset to the closest %16.
    size_t offset = (16 - range.bot%16)%16;
@@ -568,7 +572,7 @@ recursive_csa_query
    int    done = 1;
    size_t rlen = range.top - range.bot + 1;
    for (int i = 0; i < rlen; i++) {
-      if (!sa_values[i]) {
+      if (sa_values[i] > bwt->txtlen) {
 	 done = 0;
 	 break;
       }
@@ -590,7 +594,7 @@ recursive_csa_query
       prev_c[i] = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
       c_count[prev_c[i]]++;
       // 2. Mark the nucleotide for extension if SA value is missing.
-      if (!sa_values[i]) extend[(int)prev_c[i]] = 1;
+      if (sa_values[i] > bwt->txtlen) extend[(int)prev_c[i]] = 1;
    }
 
    // Extend unsampled nucleotides.
@@ -644,14 +648,14 @@ query_csa_range
  )
 {
    ssize_t nloc = range.top - range.bot + 1;
-   size_t * sa_values = calloc(nloc, sizeof(size_t));
+   size_t * sa_values = malloc(nloc * sizeof(size_t));
    exit_on_memory_error(sa_values);
+   // Flag all positions as missing
+   for (size_t i = 0; i < nloc; i++)
+      sa_values[i] = bwt->txtlen+1;
 
-   if (nloc > 1) {
-      recursive_csa_query(csa, bwt, occ, range, sa_values, 0);
-   } else {
-      sa_values[0] = query_csa(csa, bwt, occ, range.top);
-   }
+   // Do the recursive search
+   recursive_csa_query(csa, bwt, occ, range, sa_values, 0);
 
    return sa_values;
 }
