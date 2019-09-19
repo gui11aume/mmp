@@ -887,6 +887,9 @@ mapread
 		 seeds->pos, n_mem, repeats_minscore);
       }
 
+      int nseen = 0;
+      size_t seen[50] = {0};
+
       // Align seeds.
       // Sort alignable seeds by span.
       qsort(seeds->ptr, n_mem, sizeof(seed_t *), mem_by_span);
@@ -911,6 +914,25 @@ mapread
 	 ssize_t nloci = mem->range.top - mem->range.bot + 1;
 	 for (ssize_t v = 0; v < nloci; v++) {
 	    ssize_t k = (v+circ_num)%nloci;
+       // Check if locus was alreay aligned.
+       size_t indexpos = (mem->sa[k] - mem->beg) / 50;
+       int skip_alignment = 0;
+       for (int ii = 0 ; ii < nseen ; ii++) {
+          if (indexpos == seen[ii]) {
+             skip_alignment = 1;
+             break;
+          }
+       }
+       if (skip_alignment) {
+          if (DEBUG_VERBOSE) {
+             fprintf(stdout, "locus %ld already aligned: skipping\n--\n",
+                   mem->sa[k]-mem->beg);
+          }
+          break;
+       }
+       else if (nseen < 50) {
+          seen[nseen++] = indexpos;
+       }
 	    align_t alignment = (align_t){mem->sa[k], mem->end - mem->beg + 1, minscore, mem};
 	    if (DEBUG_VERBOSE) {
 	       char * strpos  = chr_string(alignment.refpos, idx.chr);
