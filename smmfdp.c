@@ -627,7 +627,7 @@ batchmap
 
       aln[0].score = aln[1].score = 9999;
 
-      for (int redo = 0 ; redo < 2 ; redo++) {
+      for (int redo = 0 ; redo < 1 ; redo++) {
 
          alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip, best_score);
          if (!alnstack) exit(EXIT_FAILURE);
@@ -648,12 +648,21 @@ batchmap
 
          best_score = a.score;
 
-         // In case of ties, the quality is the
-         // probability of choosing the right one.
-         // XXX This is incorect with 0 error XXX //
-         aln[redo].qual = alnstack->pos > 1 ?
-            1.0 - 1.0 / alnstack->pos :
-            quality(aln[redo], seq, idx, skip);
+         // XXX This part of the code needs attention XXX //
+         int there_is_only_one_best_hit = 1;
+         if (alnstack->pos > 1) {
+            // See if the hits are actually distinct.
+            size_t ref = alnstack->aln[0].refpos;
+            for (int i = 1 ; i < alnstack->pos ; i++) {
+               if (alnstack->aln[0].refpos != ref) {
+                  there_is_only_one_best_hit = 0;
+                  break;
+               }
+            }
+         }
+
+         aln[redo].qual = there_is_only_one_best_hit ?
+            quality(aln[redo], seq, idx, skip) : .5;
 
          // Free alignments
          for(size_t i = 0; i < alnstack->pos; i++)
