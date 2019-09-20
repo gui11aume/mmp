@@ -461,8 +461,6 @@ quality
    for ( ; imax > 0 ; imax--) {
       if (uN0[imax].N0 < worst_case_N0) break;
    }
-   // ... actually pick the median instead.
-   imax = (imax+1)/2;
 
    int N0 = uN0[imax].N0;
    double u = uN0[imax].u;
@@ -654,7 +652,7 @@ batchmap
             // See if the hits are actually distinct.
             size_t ref = alnstack->aln[0].refpos;
             for (int i = 1 ; i < alnstack->pos ; i++) {
-               if (alnstack->aln[0].refpos != ref) {
+               if (alnstack->aln[i].refpos != ref) {
                   there_is_only_one_best_hit = 0;
                   break;
                }
@@ -662,7 +660,7 @@ batchmap
          }
 
          aln[redo].qual = there_is_only_one_best_hit ?
-            quality(aln[redo], seq, idx, skip) : .5;
+            quality(aln[redo], seq, idx, skip) : 1-1./alnstack->pos;
 
          // Free alignments
          for(size_t i = 0; i < alnstack->pos; i++)
