@@ -422,8 +422,7 @@ quality
 (
          aln_t   aln,
    const char *  seq,
-         index_t idx,
-         int     skip
+         index_t idx
 )
 {
 
@@ -455,7 +454,7 @@ quality
       }
    }
 
-   // Pick the largest value of N0...
+   // Take the worst N0.
    qsort(uN0, tot, sizeof(uN0_t), cmpN0);
    int imax = tot-1;
    for ( ; imax > 0 ; imax--) {
@@ -474,13 +473,20 @@ quality
    double pswap = 1 - pow(1 - m*u/3 * pow(1-u,slen-1), N0);
    double ptrue_not_best = pm * pswap;
 
-   ssize_t nerr = skip == 0 ?
-      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
-         aln.score-1 : aln.score-2) : aln.score;
-   ssize_t naln = skip == 0 ?
-      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
-          slen - aln.read_end + aln.read_beg - 2 :
-          slen - aln.read_end + aln.read_beg - 3) : slen-GAMMA;
+   ssize_t nerr = (aln.read_beg == 0 || aln.read_end == slen-1) ?
+      aln.score-1 :
+      aln.score-2;
+   ssize_t naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
+      slen - aln.read_end + aln.read_beg - 2 :
+      slen - aln.read_end + aln.read_beg - 3;
+// This obsolete part was used with skip seeds.
+//   ssize_t nerr = skip == 0 ?
+//      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
+//         aln.score-1 : aln.score-2) : aln.score;
+//   ssize_t naln = skip == 0 ?
+//      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
+//          slen - aln.read_end + aln.read_beg - 2 :
+//          slen - aln.read_end + aln.read_beg - 3) : slen-GAMMA;
 
    if (aln.score == 0) {
       // Perfect score or error on the flank. Also condition
@@ -491,13 +497,32 @@ quality
          // We estimate that 0.3 is the fraction of sites with
          // exactly 1 duplicate.
          const int mm = (tot+1)/2;
-         // Set 'u' to maximize expression.
-         u = mm / (double) slen;
          if (tot % 2 == 1) {
-            return pow(11*PROB,mm) / pow(1-PROB,mm) *
-               pow(u/3,mm)*pow(1-u,slen-mm);
+            // Odd number of 30 nt triplets: we place a mm in the
+            // event triplets. There are 11 positions on the first
+            // and the last triplets, 10 positions on the internal
+            // ones. The number of ways to choose the positions is
+            // 11^2 * 10^{mm-2}. Those are mm errors (occurrence
+            // PROB), the other nucleotides are correct (occurrence
+            // 1-PROB). The duplicate has two compensating mutations
+            // at those positions (occurrence u/3), the other
+            // positions are not mutations (occurrence 1-u). We
+            // divide by the probability that the read has score 0,
+            // approximately equal to the probability that there is
+            // no mutation. We also divide by the probability that
+            // p0 is small, approximately 2/3 per segment.
+            // Note that we divide 'tot' by 3 to approximate
+            // the dependence between consecutive segments.
+            // We also count a 1/2 probability that the read is
+            // repeated with the specified level of u.
+            u = mm / (double) slen; // Set 'u' to maximize expression.
+            return .3 * pow(11*PROB*u/3 / (1-PROB), mm) *
+                        pow(1-u,slen-mm) / pow(.666,tot/3.);
+            // 0.5 * (11*pu/3)^mm * (1-u)^k-mm * (1-p)^k-mm /
+            //    (1-p)^k * 2/3^tot/3
          }
          else {
+            // FIXME: check this part here.
             return 2*11*pow(PROB,mm) / pow(1-PROB,mm) *
                pow(u/3,mm)*pow(1-u,slen-mm);
          }
@@ -512,16 +537,53 @@ quality
          return prob > 1 ? 1 : prob;
       }
    }
-   else if (aln.score == 1 && skip == 0 && p0 < .2) {
+//   else if (aln.score == 1 && skip == 0 && p0 < .2) {
+   else if (aln.score == 1 && p0 < .2) {
+      // Case 1: the mismatch is in the second (or but-to-last)
+      // segment, no further than GAMMA = 17 from the border. An
+      // error can occur if the mismatch is an error (frequency p)
+      // combined with an uncompensated mutation (2u/3). Other
+      // hidden compensated errors are in the even segments.
+      // Case 3: the mismatch is somewhere else. The most likely
+      // scenario for an error is that the mismatch is a mutation
+      // (frequency u) and that it there are two hidden and
+      // compensated errors in even semgnents.
+      // We need to divide by the probability of occurrence,
+      // approximately equal to the probability that the read
+      // contains one error at the given position  and that all
+      // the segments report N=0 (frequency 2/3 each).
+      // Note that we divide 'tot' by 3 to approximate the
+      // dependence between consecutive segments.
+      // We also count a 1/2 probability that the read is
+      // repeated with the specified level of u.
       int errpos = aln.read_beg == 0 ? aln.read_end+1 : aln.read_beg-1;
-      if ((1 + errpos / 10) % 2 == 1) {
-         u = 3 / (double) 50;
-         return pow(u,3)/9. * pow(1-u,slen-3) * PROB/(1-PROB) * 11*11;
+      int case_1 = (errpos >= 10 && errpos < 17) ||
+         (errpos < slen-10 && errpos >= slen-17);
+      const int mm = (tot+1)/2;
+      if (case_1) {
+         u = mm / (double) slen; // Set 'u' to maximize expression.
+         return 0.5 * 2*u/3 * pow(11*PROB*u/3 / (1-PROB), mm-1) *
+               pow(1-u, slen-mm) / pow(.666,tot/3.);
+         // 0.5 * 14 * 2*pu/3 * (11*pu/3)^mm-1 * (1-u)^k-mm *
+         //    (1-p)^k-mm / 14 * p*(1-p)^k-1 * 2/3^tot/3
       }
       else {
-         u = 2 / (double) 50;
-         return pow(u,2)/9. * pow(1-u, slen-2) * PROB/(1-PROB) * 2*11;
+         u = (mm+1) / (double) slen; // Set 'u' to maximize expression.
+         return 0.5 * pow(11*PROB*u/3 / (1-PROB), mm) * u*(1-PROB) *
+               pow(1-u,slen-mm-1) / PROB / pow(.666,tot/3.);
+         // 0.5 * (k-14) * u*(1-p) * (11*pu/3)^mm * (1-u)^k-mm-1 *
+         //    (1-p)^k-mm-1 / (k-14) * p*(1-p)^k-1 * 2/3^tot/3
       }
+   }
+   else if (aln.score == 2 && p0 < .2) {
+      // Assume two uncompensated errors in even segments.
+      const int mm = (tot+1)/2;
+      u = mm / (double) slen; // Set 'u' to maximize expression.
+      return 2. * mm*(mm-1) * pow(11*PROB*u/3 / (1-PROB), mm) *
+            pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) / 
+            slen / (slen-1) /pow(.666,tot/3.);
+      // 0.5 * (mm choose 2) * (11*2*pu/3)^2 * (10*pu/3)^mm-2 *
+      //    (1-u)^k-mm * (1-p)^k-mm / k*(k-1)/2*p^2*(1-p)^k-2 * 2/3^tot/3
    }
    else {
       // Condition by the probability that the read has at
@@ -529,9 +591,10 @@ quality
       double cond = exp(lgamma(slen+1) -lgamma(aln.score+1)
          -lgamma(slen-aln.score+1) +
          aln.score*log(PROB) + (slen-aln.score)*log(1-PROB));
-      double poff = skip == 0 ?
-         auto_mem_seed_offp(slen, u, N0) :
-         auto_skip_seed_offp(slen, skip, u, N0);
+      double poff = auto_mem_seed_offp(slen, u, N0);
+//      double poff = skip == 0 ?
+//         auto_mem_seed_offp(slen, u, N0) :
+//         auto_skip_seed_offp(slen, skip, u, N0);
       // Count only the evidence from the nucleotides that were
       // actually aligned (those in the seed are already taken
       // into account in the Sesame prior probability). For MEM,
@@ -619,86 +682,45 @@ batchmap
          sesame_set_static_params(GAMMA, rlen, PROB);
       }
 
-      int skip = 0; // Try MEM seeding first.
-      int best_score = rlen;
-      aln_t aln[2]  = {{0}};
+      alnstack_t * alnstack = mapread(seq, idx, GAMMA, 0, rlen);
+      // No skip seeds --------------------------------^
+      if (!alnstack) exit(EXIT_FAILURE);
 
-      aln[0].score = aln[1].score = 9999;
+      // Did not find anything.
+      if (alnstack->pos == 0) {
+         free(alnstack);
+         fprintf(stdout, "%s\tNA\tNA\n", seq);
+         continue;
+      }
 
-      for (int redo = 0 ; redo < 1 ; redo++) {
+      // Pick a top alignment at "random".
+      aln_t a = alnstack->aln[counter++ % alnstack->pos];
 
-         alnstack_t * alnstack = mapread(seq, idx, GAMMA, skip, best_score);
-         if (!alnstack) exit(EXIT_FAILURE);
-
-         // Did not find anything.
-         if (alnstack->pos == 0) {
-            free(alnstack);
-            break;
-         }
-
-         // Pick a top alignment at "random".
-         aln_t a = alnstack->aln[counter++ % alnstack->pos];
-         aln[redo].score    = a.score;
-         aln[redo].refpos   = a.refpos;
-         aln[redo].refseq   = a.refseq;
-         aln[redo].read_beg = a.read_beg;
-         aln[redo].read_end = a.read_end;
-
-         best_score = a.score;
-
-         // XXX This part of the code needs attention XXX //
-         int there_is_only_one_best_hit = 1;
-         if (alnstack->pos > 1) {
-            // See if the hits are actually distinct.
-            size_t ref = alnstack->aln[0].refpos;
-            for (int i = 1 ; i < alnstack->pos ; i++) {
-               if (alnstack->aln[i].refpos != ref) {
-                  there_is_only_one_best_hit = 0;
-                  break;
-               }
+      int there_is_only_one_best_hit = 1;
+      if (alnstack->pos > 1) {
+         // See if the hits are actually distinct.
+         size_t ref = alnstack->aln[0].refpos;
+         for (int i = 1 ; i < alnstack->pos ; i++) {
+            if (alnstack->aln[i].refpos != ref) {
+               there_is_only_one_best_hit = 0;
+               break;
             }
          }
-
-         aln[redo].qual = there_is_only_one_best_hit ?
-            quality(aln[redo], seq, idx, skip) : 1-1./alnstack->pos;
-
-         // Free alignments
-         for(size_t i = 0; i < alnstack->pos; i++)
-            free(alnstack->aln[i].refseq);
-         free(alnstack);
-
-         // We are done if we found a perfect hit or
-         // if the quality is higher than 'SKIPQUAL'.
-         // (-4.34 = -10/log(10) amounts to taking log10).
-         if (aln[0].score == 0 || -4.34*log(aln[0].qual) >= SKIPQUAL)
-            break;
-
-         // Otherwise try skip seeds
-         skip = 12;
-
       }
+
+      a.qual = there_is_only_one_best_hit ?
+         quality(a, seq, idx) : 1-1./alnstack->pos;
 
       // Report mapping results
-      if (aln[0].score >= 9999 && aln[1].score >= 9999) {
-         // Nothing found.
-         fprintf(stdout, "%s\tNA\tNA\n", seq);
-      }
-      else if (
-            (aln[0].score <  aln[1].score) ||
-            (aln[0].score == aln[1].score && aln[0].qual < .5)) {
-         // Use MEM alignment if better than skip seed alignment,
-         // or if equally good and has discovered several equally
-         // good hits in the genome.
-         char * apos = chr_string(aln[0].refpos, idx.chr);
-         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[0].qual);
-         free(apos);
-      }
-      else {
-         // did not miss anything important.
-         char * apos = chr_string(aln[1].refpos, idx.chr);
-         fprintf(stdout, "%s\t%s\t%e\n", seq, apos, aln[1].qual);
-         free(apos);
-      }
+      char * apos = chr_string(a.refpos, idx.chr);
+      fprintf(stdout, "%s\t%s\t%e\n", seq, apos, a.qual);
+      free(apos);
+
+      // Free alignments
+      for(size_t i = 0; i < alnstack->pos; i++)
+         free(alnstack->aln[i].refseq);
+      free(alnstack);
+
    }
 
    fclose(inputf);
