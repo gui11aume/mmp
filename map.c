@@ -940,6 +940,7 @@ mapread
 		       alignment.refpos, strpos, alignment.span, minscore);
 	       free(strpos);
 	    }
+
 	    align(alignment, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
 	    
 	    // Stop alignments if necessary conditions met

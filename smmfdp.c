@@ -440,30 +440,115 @@ quality
 
    int tot = 0;
    double lev = 0;
+   int yes_max_evidence_N_is_0 = 1;
+
+   // Estimate N and mu.
    for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
+      /*
       if (aln.read_end < s+10 || aln.read_beg > s+19) {
          // Estimate only at the site of the seed.
+         // TODO: check whether this is really the best option.
          uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0, 0 };
          continue;
       }
+      */
       uN0[tot] = estimate_uN0(aln.refseq + s, idx);
-      lev += uN0[tot].lev;
+      // Failsafe when estimation fails (e.g., because of "N").
       if (uN0[tot].u != uN0[tot].u) {
-         // In case estimation fails (e.g., because of "N").
          uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0, 0 };
+      }
+      // The magic value '0.6367' is the maximum possible value
+      // of the evidence that N0 = 0 for each segment.
+      if (uN0[tot].lev < 0.6367) yes_max_evidence_N_is_0 = 0;
+      lev += uN0[tot].lev; // Collect total evidence.
+   }
+
+   if (yes_max_evidence_N_is_0 && slen >= 40) {
+      // Those are the "super reads".
+      const int mm = 1 + tot/2;
+      if (aln.score == 0) {
+         // Odd number of 30 nt triplets: we place a mm in the
+         // event triplets. There are 11 positions on the first
+         // and the last triplets, 10 positions on the internal
+         // ones. The number of ways to choose the positions is
+         // 11^2 * 10^{mm-2}. Those are mm errors (occurrence
+         // PROB), the other nucleotides are correct (occurrence
+         // 1-PROB). The duplicate has two compensating mutations
+         // at those positions (occurrence u/3), the other
+         // positions are not mutations (occurrence 1-u). We
+         // divide by the probability that the read has score 0,
+         // approximately equal to the probability that there is
+         // no mutation. We also divide by the probability that
+         // p0 is small, approximately 2/3 per segment.
+         // Note that we divide 'tot' by 3 to approximate
+         // the dependence between consecutive segments.
+         // We also count a 1/2 probability that the read is
+         // repeated with the specified level of u.
+         double u = mm / (double) slen; // Worst value of 'u'.
+         return .3 * pow(11*PROB*u/3 / (1-PROB), mm) *
+                     pow(1-u,slen-mm) / pow(.666,tot/3.);
+         // 0.5 * (11*pu/3)^mm * (1-u)^k-mm * (1-p)^k-mm /
+         // (1-p)^k * 2/3^tot/3
+      }
+      else if (aln.score == 1) {
+         // Case 1: the mismatch is in the second (or but-to-last)
+         // segment, no further than GAMMA = 17 from the border. An
+         // error can occur if the mismatch is an error (frequency p)
+         // combined with an uncompensated mutation (2u/3). Other
+         // hidden compensated errors are in the even segments.
+         // Case 3: the mismatch is somewhere else. The most likely
+         // scenario for an error is that the mismatch is a mutation
+         // (frequency u) and that it there are two hidden and
+         // compensated errors in even semgnents.
+         // We need to divide by the probability of occurrence,
+         // approximately equal to the probability that the read
+         // contains one error at the given position  and that all
+         // the segments report N=0 (frequency 2/3 each).
+         // Note that we divide 'tot' by 3 to approximate the
+         // dependence between consecutive segments.
+         // We also count a 1/2 probability that the read is
+         // repeated with the specified level of u.
+         int errpos = aln.read_beg == 0 ? aln.read_end+1 : aln.read_beg-1;
+         int case_1 = (errpos >= 10 && errpos < 17) ||
+            (errpos < slen-10 && errpos >= slen-17);
+         const int mm = (tot+1)/2;
+         if (case_1) {
+            double u = mm / (double) slen; // Worst value of 'u'.
+            return 0.5 * 2*u/3 * pow(11*PROB*u/3 / (1-PROB), mm-1) *
+                  pow(1-u, slen-mm) / pow(.666,tot/3.);
+            // 0.5 * 14 * 2*pu/3 * (11*pu/3)^mm-1 * (1-u)^k-mm *
+            // (1-p)^k-mm / 14 * p*(1-p)^k-1 * 2/3^tot/3
+         }
+         else {
+            double u = (mm+1) / (double) slen; // Worst value of 'u'.
+            return 0.5 * pow(11*PROB*u/3 / (1-PROB), mm) * u*(1-PROB) *
+                  pow(1-u,slen-mm-1) / PROB / pow(.666,tot/3.);
+            // 0.5 * (k-14) * u*(1-p) * (11*pu/3)^mm * (1-u)^k-mm-1 *
+            // (1-p)^k-mm-1 / (k-14) * p*(1-p)^k-1 * 2/3^tot/3
+         }
+      }
+      else if (aln.score == 2) {
+         // Assume two uncompensated errors in even segments.
+         const int mm = (tot+1)/2;
+         double u = mm / (double) slen; // Worst value of 'u'.
+         return 2. * mm*(mm-1) * pow(11*PROB*u/3 / (1-PROB), mm) *
+               pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) / 
+               slen / (slen-1) /pow(.666,tot/3.);
+         // 0.5 * (mm choose 2) * (11*2*pu/3)^2 * (10*pu/3)^mm-2 *
+         // (1-u)^k-mm * (1-p)^k-mm / k*(k-1)/2*p^2*(1-p)^k-2 * 2/3^tot/3
       }
    }
 
-   // Take the worst N0.
+   // Not a super read: use estimation of N and u.
    qsort(uN0, tot, sizeof(uN0_t), cmpN0);
    int imax = tot-1;
    for ( ; imax > 0 ; imax--) {
+      // Take the "worst" N0.
       if (uN0[imax].N0 < worst_case_N0) break;
    }
 
    int N0 = uN0[imax].N0;
    double u = uN0[imax].u;
-
    double p0 = 1. / (1. + exp(lev));
 
    // Probability that the true location is not the best.
@@ -479,111 +564,15 @@ quality
    ssize_t naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
       slen - aln.read_end + aln.read_beg - 2 :
       slen - aln.read_end + aln.read_beg - 3;
-// This obsolete part was used with skip seeds.
-//   ssize_t nerr = skip == 0 ?
-//      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
-//         aln.score-1 : aln.score-2) : aln.score;
-//   ssize_t naln = skip == 0 ?
-//      ((aln.read_beg == 0 || aln.read_end == slen-1) ?
-//          slen - aln.read_end + aln.read_beg - 2 :
-//          slen - aln.read_end + aln.read_beg - 3) : slen-GAMMA;
 
    if (aln.score == 0) {
-      // Perfect score or error on the flank. Also condition
-      // on the probability that the read has no error or one
-      // error on the flank.
-      if (p0 < .2) { // TODO: fix condition.
-         // Those are the "super reads". Separate odd vs even.
-         // We estimate that 0.3 is the fraction of sites with
-         // exactly 1 duplicate.
-         const int mm = (tot+1)/2;
-         if (tot % 2 == 1) {
-            // Odd number of 30 nt triplets: we place a mm in the
-            // event triplets. There are 11 positions on the first
-            // and the last triplets, 10 positions on the internal
-            // ones. The number of ways to choose the positions is
-            // 11^2 * 10^{mm-2}. Those are mm errors (occurrence
-            // PROB), the other nucleotides are correct (occurrence
-            // 1-PROB). The duplicate has two compensating mutations
-            // at those positions (occurrence u/3), the other
-            // positions are not mutations (occurrence 1-u). We
-            // divide by the probability that the read has score 0,
-            // approximately equal to the probability that there is
-            // no mutation. We also divide by the probability that
-            // p0 is small, approximately 2/3 per segment.
-            // Note that we divide 'tot' by 3 to approximate
-            // the dependence between consecutive segments.
-            // We also count a 1/2 probability that the read is
-            // repeated with the specified level of u.
-            u = mm / (double) slen; // Set 'u' to maximize expression.
-            return .3 * pow(11*PROB*u/3 / (1-PROB), mm) *
-                        pow(1-u,slen-mm) / pow(.666,tot/3.);
-            // 0.5 * (11*pu/3)^mm * (1-u)^k-mm * (1-p)^k-mm /
-            //    (1-p)^k * 2/3^tot/3
-         }
-         else {
-            // FIXME: check this part here.
-            return 2*11*pow(PROB,mm) / pow(1-PROB,mm) *
-               pow(u/3,mm)*pow(1-u,slen-mm);
-         }
-      }
-      else {
-         // Not a super read, but since the score is 0, the
-         // only way to be wrong is that the true location is
-         // not the best. Also condition by the probability
-         // that the read has no error.
-         double cond = pow(1-PROB, slen);
-         double prob = p0 * ptrue_not_best / cond;
-         return prob > 1 ? 1 : prob;
-      }
-   }
-//   else if (aln.score == 1 && skip == 0 && p0 < .2) {
-   else if (aln.score == 1 && p0 < .2) {
-      // Case 1: the mismatch is in the second (or but-to-last)
-      // segment, no further than GAMMA = 17 from the border. An
-      // error can occur if the mismatch is an error (frequency p)
-      // combined with an uncompensated mutation (2u/3). Other
-      // hidden compensated errors are in the even segments.
-      // Case 3: the mismatch is somewhere else. The most likely
-      // scenario for an error is that the mismatch is a mutation
-      // (frequency u) and that it there are two hidden and
-      // compensated errors in even semgnents.
-      // We need to divide by the probability of occurrence,
-      // approximately equal to the probability that the read
-      // contains one error at the given position  and that all
-      // the segments report N=0 (frequency 2/3 each).
-      // Note that we divide 'tot' by 3 to approximate the
-      // dependence between consecutive segments.
-      // We also count a 1/2 probability that the read is
-      // repeated with the specified level of u.
-      int errpos = aln.read_beg == 0 ? aln.read_end+1 : aln.read_beg-1;
-      int case_1 = (errpos >= 10 && errpos < 17) ||
-         (errpos < slen-10 && errpos >= slen-17);
-      const int mm = (tot+1)/2;
-      if (case_1) {
-         u = mm / (double) slen; // Set 'u' to maximize expression.
-         return 0.5 * 2*u/3 * pow(11*PROB*u/3 / (1-PROB), mm-1) *
-               pow(1-u, slen-mm) / pow(.666,tot/3.);
-         // 0.5 * 14 * 2*pu/3 * (11*pu/3)^mm-1 * (1-u)^k-mm *
-         //    (1-p)^k-mm / 14 * p*(1-p)^k-1 * 2/3^tot/3
-      }
-      else {
-         u = (mm+1) / (double) slen; // Set 'u' to maximize expression.
-         return 0.5 * pow(11*PROB*u/3 / (1-PROB), mm) * u*(1-PROB) *
-               pow(1-u,slen-mm-1) / PROB / pow(.666,tot/3.);
-         // 0.5 * (k-14) * u*(1-p) * (11*pu/3)^mm * (1-u)^k-mm-1 *
-         //    (1-p)^k-mm-1 / (k-14) * p*(1-p)^k-1 * 2/3^tot/3
-      }
-   }
-   else if (aln.score == 2 && p0 < .2) {
-      // Assume two uncompensated errors in even segments.
-      const int mm = (tot+1)/2;
-      u = mm / (double) slen; // Set 'u' to maximize expression.
-      return 2. * mm*(mm-1) * pow(11*PROB*u/3 / (1-PROB), mm) *
-            pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) / 
-            slen / (slen-1) /pow(.666,tot/3.);
-      // 0.5 * (mm choose 2) * (11*2*pu/3)^2 * (10*pu/3)^mm-2 *
-      //    (1-u)^k-mm * (1-p)^k-mm / k*(k-1)/2*p^2*(1-p)^k-2 * 2/3^tot/3
+      // Not a super read, but since the score is 0, the
+      // only way to be wrong is that the true location is
+      // not the best. Also condition by the probability
+      // that the read has no error.
+      double cond = pow(1-PROB, slen);
+      double prob = p0 * ptrue_not_best / cond;
+      return prob > 1 ? 1 : prob;
    }
    else {
       // Condition by the probability that the read has at
@@ -592,9 +581,7 @@ quality
          -lgamma(slen-aln.score+1) +
          aln.score*log(PROB) + (slen-aln.score)*log(1-PROB));
       double poff = auto_mem_seed_offp(slen, u, N0);
-//      double poff = skip == 0 ?
-//         auto_mem_seed_offp(slen, u, N0) :
-//         auto_skip_seed_offp(slen, skip, u, N0);
+
       // Count only the evidence from the nucleotides that were
       // actually aligned (those in the seed are already taken
       // into account in the Sesame prior probability). For MEM,
@@ -622,7 +609,6 @@ quality
       return max + term3 > 1. ? 1. : max + term3;
 
    }
-
 
 }
 
