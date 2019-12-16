@@ -871,7 +871,7 @@ align
    }
 }
 
-void
+int
 filter_longest_mem
 (
  wstack_t * seeds
@@ -889,6 +889,8 @@ filter_longest_mem
       }
       seeds->ptr[seeds->pos++] = s;
    }
+
+   return maxlen;
 }
 
 alnstack_t *

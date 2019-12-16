@@ -50,7 +50,7 @@ struct alnstack_t {
 
 alnstack_t * mapread (const char *, const index_t, const size_t, const int, const int);
 void         extend_l1l2 (const char *, const index_t, seed_t *, seed_t *);
-void         filter_longest_mem (wstack_t *);
+int          filter_longest_mem (wstack_t *);
 alnstack_t * alnstack_new (size_t max);
 void         align (align_t , const char*, char *, size_t , int *, alnstack_t **);
 

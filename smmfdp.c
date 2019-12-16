@@ -280,53 +280,24 @@ load_index
 uN0_t
 new_estimate_N0
 (
-   const char    * seq,
-   const int       len,
-   const index_t   idx,
-   const double    mu
+ seed_t         l1,
+ seed_t         l2,
+ const index_t  idx,
+ const double   mu
 )
 {
 
-   assert (len > 20);
+   int fwd = l1->end - l1->beg + 1;
 
-   size_t merid = 0;
-   int mlen;
-
-   // Look up the beginning (reverse) of the query in lookup table.
-   for (mlen = 0 ; mlen < LUTK ; mlen++) {
-      // Note: every "N" is considered a "A".
-      uint8_t c = ENCODE[(uint8_t) seq[len-mlen-1]];
-      merid = c + (merid << 2);
-   }
-   range_t range = idx.lut->kmer[merid];
-
-   // See how far we can push.
-   for ( ; mlen < len ; mlen++) {
-      // When there are "N" in the reference, the estimation
-      // must bail out because we cannot find the answer.
-      if (NONALPHABET[(uint8_t) seq[len-mlen-1]])
-         goto in_case_of_failure;
-      int c = ENCODE[(uint8_t) seq[len-mlen-1]];
-      range.bot = get_rank(idx.occ, c, range.bot - 1);
-      range.top = get_rank(idx.occ, c, range.top) - 1;
-      // If only 1 hit remains, we can bail out.
-      if (range.bot >= range.top) break;
-   }
-
-   int fwd = mlen;
-
-   double a;
-   double b;
-
-   a = 1. - pow(1-mu,fwd);
-   b = 1. - pow(1-mu,fwd-1);
+   double a = 1. - pow(1-mu,fwd);
+   double b = 1. - pow(1-mu,fwd-1);
 
    int N1 = log(log(a)/log(b)) / (log(b) - log(a)) -1;
 
-   if (fwd == len) {
+   if (l1->beg == 0) {
       // No need to go reverse: the answer will be the same.
       // We switch gear and use Newton-Raphson iterations.
-      long int m = range.top-range.bot - 1;
+      long int m = l1.range.top-l1.range.bot - 1;
       double p = pow(1-mu,len);
       double N = N1;
       for (int j = 0 ; j < 8 ; j++) {
@@ -337,29 +308,7 @@ new_estimate_N0
       return (uN0_t) {mu, N, 1.};
    }
 
-   merid = 0;
-
-   // Look up the beginning (forward) of the query in lookup table.
-   for (mlen = 0 ; mlen < LUTK ; mlen++) {
-      // Note: every "N" is considered a "T".
-      uint8_t c = REVCMP[(uint8_t) seq[mlen]];
-      merid = c + (merid << 2);
-   }
-   range = idx.lut->kmer[merid];
-
-   for ( ; mlen < len ; mlen++) {
-      // When there are "N" in the reference, the estimation
-      // must bail out because we cannot find the answer.
-      if (NONALPHABET[(uint8_t) seq[mlen]])
-         goto in_case_of_failure;
-      int c = REVCMP[(uint8_t) seq[mlen]];
-      range.bot = get_rank(idx.occ, c, range.bot - 1);
-      range.top = get_rank(idx.occ, c, range.top) - 1;
-      // If only 1 hit remains, we can bail out.
-      if (range.bot >= range.top) break;
-   }
-
-   int bwd = mlen;
+   int bwd = l2->end - l2->beg + 1;
 
    a = 1. - pow(1-mu,bwd);
    b = 1. - pow(1-mu,bwd-1);
@@ -795,11 +744,12 @@ batchmap
       }
 
       // Compute N(L1,L2)
-      N = new_estimate(l1,l2); // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      N0 = new_estimate_N0(l1,l2,idx,0.06);
 
       // Quick mode: only align longest MEMs
-      if (N > QUICK_DUPLICATES) 
-	 filter_longest_mem(mems);
+      int mem_length = -1;
+      if (N0 > QUICK_DUPLICATES) 
+	 mem_length = filter_longest_mem(mems);
 
       alnstack_t * alnstack = mapread(mems, seq, idx, rlen);
 
@@ -825,9 +775,9 @@ batchmap
          }
       }
 
-      // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      // XXXXXXXXXXXXXXXX TODO: IMPLEMENT QUALITY AND QUALITY QUICK
       if (there_is_only_one_best_hit)
-	 a.qual = N > QUICK_DUPLICATES ? quality_quick(a, seq, idx) : quality(a, seq, idx); 
+	 a.qual = N0 > QUICK_DUPLICATES ? quality_quick(a, seq, idx, mem_length, N0) : quality(a, seq, idx, N0);
       else
 	 a.qual = 1-1./alnstack->pos;
 	 
