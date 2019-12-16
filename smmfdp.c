@@ -10,6 +10,7 @@
 #define GAMMA 17
 #define PROBDEFAULT 0.01
 #define SKIPQUALDEFAULT 10
+#define QUICK_DUPLICATES 20
 
 // Index parameters
 #define OCC_INTERVAL_SIZE 8
@@ -668,9 +669,29 @@ batchmap
          sesame_set_static_params(GAMMA, rlen, PROB);
       }
 
-      alnstack_t * alnstack = mapread(seq, idx, GAMMA, 0, rlen);
-      // No skip seeds --------------------------------^
-      if (!alnstack) exit(EXIT_FAILURE);
+      // Compute L1, L2 and MEMs.
+      seed_t l1, l2;
+      extend_l1l2(seq, idx, &l1, &l2);
+
+      // Compute seeds.
+      wstack_t * seeds = mem_seeds(seq, idx, GAMMA);
+
+      // Return if no seeds were found
+      if (seeds->pos == 0) {
+	 // Did not find anything.
+         free(seeds);
+         fprintf(stdout, "%s\tNA\tNA\n", seq);
+         continue;
+      }
+
+      // Compute N(L1,L2)
+      N = new_estimate(l1,l2); // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+      // Quick mode: only align longest MEMs
+      if (N > QUICK_DUPLICATES) 
+	 filter_longest_mem(mems);
+
+      alnstack_t * alnstack = mapread(mems, seq, idx, rlen);
 
       // Did not find anything.
       if (alnstack->pos == 0) {
@@ -694,9 +715,12 @@ batchmap
          }
       }
 
-      a.qual = there_is_only_one_best_hit ?
-         quality(a, seq, idx) : 1-1./alnstack->pos;
-
+      // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      if (there_is_only_one_best_hit)
+	 a.qual = N > QUICK_DUPLICATES ? quality_quick(a, seq, idx) : quality(a, seq, idx); 
+      else
+	 a.qual = 1-1./alnstack->pos;
+	 
       // Report mapping results
       char * apos = chr_string(a.refpos, idx.chr);
       fprintf(stdout, "%s\t%s\t%e\n", seq, apos, a.qual);

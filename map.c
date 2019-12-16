@@ -450,6 +450,72 @@ chain_skip
    
 }
 
+void
+extend_l1l2
+(
+ const char   * seq,
+ const index_t  idx,
+ seed_t       * l1,
+ seed_t       * l2
+)
+{
+   int len = strlen(seq);
+
+   // Preallocate ranges
+   range_t range = {0};
+   range_t newrange = {0};
+
+   // Backward search from end.
+   l1->end = len-1;
+
+   // L1.
+   range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
+   int i = len - 1;
+   for ( ; i >= 0 ; i--) {
+      if (NONALPHABET[(uint8_t)seq[i]]) break;
+      int c = ENCODE[(uint8_t) seq[i]];
+      newrange.bot = get_rank(idx.occ, c, range.bot - 1);
+      newrange.top = get_rank(idx.occ, c, range.top) - 1;
+      // Stop if no hits.
+      if (newrange.top < newrange.bot + 1)
+	 break;
+      range = newrange;
+   }
+
+   l1->beg = i+1;
+   l1->range = range;
+
+   // Check L1 result
+   if (l1->end - l1->beg + 1 == len) {
+      l2->beg = l1->beg;
+      l2->end = l1->end;
+      return;
+   }
+
+   // L2.
+   l2->beg = 0;
+
+   // Backward <<<
+   range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
+   int i = 0;
+   for ( ; i < len ; i++) {
+      if (NONALPHABET[(uint8_t)seq[i]]) break;
+      int c = REVCMP[(uint8_t) seq[i]];
+      newrange.bot = get_rank(idx.occ, c, range.bot - 1);
+      newrange.top = get_rank(idx.occ, c, range.top) - 1;
+      // Stop if no hits.
+      if (newrange.top < newrange.bot + 1)
+	 break;
+      range = newrange;
+   }
+
+   l2->end = i-1;
+   l2->range = range;
+
+   return;
+   
+}
+
 wstack_t *
 mem_seeds
 (
@@ -805,13 +871,32 @@ align
    }
 }
 
+void
+filter_longest_mem
+(
+ wstack_t * seeds
+)
+{
+   // Find longest MEMs in seeds.
+   int n_mems = seeds->pos;
+   int maxlen = 0;
+   for (int i = 0; i < n_mems; i++) {
+      seed_t * s = seeds->ptr[i];
+      int seedlen = s->end - s->beg + 1;
+      if (seedlen > maxlen) {
+	 maxlen = seedlen;
+	 seeds->pos = 0;
+      }
+      seeds->ptr[seeds->pos++] = s;
+   }
+}
+
 alnstack_t *
 mapread
 (
+ wstack_t      * seeds,
  const char    * seq,
  const index_t   idx,
- const size_t    gamma,
- const int       skip,
  const int       max_mismatches
  )
 {
@@ -821,139 +906,100 @@ mapread
    if (DEBUG_VERBOSE) {
       fprintf(stdout, "\n[READ] sequence: %s\n",seq);
    }
-
-   // Get seeds
-   wstack_t * seeds = NULL;
-   if (skip) {
-      seeds = skip_seeds(seq, idx, gamma, skip);
-   } else {
-      seeds = mem_seeds(seq, idx, gamma);
-   }
-
-   // Return if no seeds were found
-   if (seeds->pos == 0) {
-      free(seeds);
-      return alnstack_new(1);
-   }
-
+   
    // Chain and align seeds
    int best_score = min(max_mismatches, MAX_ALIGN_MISMATCHES);
    alnstack_t * best = alnstack_new(10);
 
-   if (skip) {
-      aligncd_t alignments = chain_skip(slen, gamma, skip, seeds, idx);
-      for (size_t j = 0; j < alignments.cnt; j++) {
-	 align_t alignment = alignments.align[j];
+   // Sort MEMs by loci, ascending.
+   qsort(seeds->ptr, seeds->pos, sizeof(seed_t *), mem_by_loci);
 
-	 // Do not align chained alncd.
-	 if (alignment.minscore > best_score || (alignment.minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
-	    if (DEBUG_VERBOSE)
-	       fprintf(stdout, "no more interesting candidates. skipping alignments.\n");
-	    break;
-	 }
+   // Alignable MEMS.
+   size_t n_mem = 0;
+   for (size_t i = 0; i < seeds->pos; i++, n_mem++) {
+      seed_t * s = (seed_t *)seeds->ptr[i];
+      if (s->range.top - s->range.bot >= MAX_MEM_SEED_LOCI)
+	 break;
+   }
 
-	 if (DEBUG_VERBOSE) {
-	    char * strpos  = chr_string(alignment.refpos, idx.chr);
-	    fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, chain_minscore: %d\n", alignment.refpos, strpos, alignment.span, alignment.minscore);
-	    free(strpos);
-	 }
-	 
-	 align(alignment, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
-      }
-      // Free alignment candidates
-      free(alignments.align);
-      
-   } else {
-      // Sort MEMs by loci, ascending.
-      qsort(seeds->ptr, seeds->pos, sizeof(seed_t *), mem_by_loci);
+   // Compute repeats minscore.
+   int repeats_minscore = slen+1;
+   for (size_t i = n_mem; i < seeds->pos; i++) {
+      seed_t * s = (seed_t *)seeds->ptr[i];
+      repeats_minscore = min(repeats_minscore, (s->beg > 0) + (s->end < slen-1));
+   }
 
-      // Alignable MEMS.
-      size_t n_mem = 0;
-      for (size_t i = 0; i < seeds->pos; i++, n_mem++) {
-	 seed_t * s = (seed_t *)seeds->ptr[i];
-	 if (s->range.top - s->range.bot >= MAX_MEM_SEED_LOCI)
-	    break;
-      }
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout, "MEMs: %ld, alignable-MEM: %ld, repeat-minscore: %d\n",
+	      seeds->pos, n_mem, repeats_minscore);
+   }
 
-      // Compute repeats minscore.
-      int repeats_minscore = slen+1;
-      for (size_t i = n_mem; i < seeds->pos; i++) {
-	 seed_t * s = (seed_t *)seeds->ptr[i];
-	 repeats_minscore = min(repeats_minscore, (s->beg > 0) + (s->end < slen-1));
-      }
+   int nseen = 0;
+   size_t seen[50] = {0};
+
+   // Align seeds.
+   // Sort alignable seeds by span.
+   qsort(seeds->ptr, n_mem, sizeof(seed_t *), mem_by_span);
+   for (size_t i = 0; i < n_mem; i++) {
+      seed_t * mem = (seed_t *)seeds->ptr[i];
+      int minscore = (mem->beg > 0) + (mem->end < slen-1);
 
       if (DEBUG_VERBOSE) {
-	 fprintf(stdout, "MEMs: %ld, alignable-MEM: %ld, repeat-minscore: %d\n",
-		 seeds->pos, n_mem, repeats_minscore);
+	 fprintf(stdout, "MEM[%ld] beg: %ld, end: %ld, span: %ld, minscore: %d, loci: %ld\n",
+		 i, mem->beg, mem->end, mem->end-mem->beg+1, minscore,
+		 mem->range.top - mem->range.bot + 1);
       }
-
-      int nseen = 0;
-      size_t seen[50] = {0};
-
-      // Align seeds.
-      // Sort alignable seeds by span.
-      qsort(seeds->ptr, n_mem, sizeof(seed_t *), mem_by_span);
-      for (size_t i = 0; i < n_mem; i++) {
-	 seed_t * mem = (seed_t *)seeds->ptr[i];
-	 int minscore = (mem->beg > 0) + (mem->end < slen-1);
-
-	 if (DEBUG_VERBOSE) {
-	    fprintf(stdout, "MEM[%ld] beg: %ld, end: %ld, span: %ld, minscore: %d, loci: %ld\n",
-		    i, mem->beg, mem->end, mem->end-mem->beg+1, minscore,
-		    mem->range.top - mem->range.bot + 1);
-	 }
 	 
-	 // Avoid useless alignments.
-	 if (minscore >= repeats_minscore || minscore > best_score || (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS))
-	    continue;
+      // Avoid useless alignments.
+      if (minscore >= repeats_minscore || minscore > best_score || (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS))
+	 continue;
 
-	 // Get SA values.
-	 mem->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, mem->range);
+      // Get SA values.
+      mem->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, mem->range);
 
-	 // Align at each locus.
-	 ssize_t nloci = mem->range.top - mem->range.bot + 1;
-	 for (ssize_t v = 0; v < nloci; v++) {
-	    ssize_t k = (v+circ_num)%nloci;
-       // Check if locus was alreay aligned.
-       size_t indexpos = (mem->sa[k] - mem->beg) / 50;
-       int skip_alignment = 0;
-       for (int ii = 0 ; ii < nseen ; ii++) {
-          if (indexpos == seen[ii]) {
-             skip_alignment = 1;
-             break;
-          }
-       }
-       if (skip_alignment) {
-          if (DEBUG_VERBOSE) {
-             fprintf(stdout, "locus %ld already aligned: skipping\n--\n",
-                   mem->sa[k]-mem->beg);
-          }
-          break;
-       }
-       else if (nseen < 50) {
-          seen[nseen++] = indexpos;
-       }
-	    align_t alignment = (align_t){mem->sa[k], mem->end - mem->beg + 1, minscore, mem};
-	    if (DEBUG_VERBOSE) {
-	       char * strpos  = chr_string(alignment.refpos, idx.chr);
-	       fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, MEM minscore: %d\n",
-		       alignment.refpos, strpos, alignment.span, minscore);
-	       free(strpos);
-	    }
-
-	    align(alignment, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
-	    
-	    // Stop alignments if necessary conditions met
-	    if (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
+      // Align at each locus.
+      ssize_t nloci = mem->range.top - mem->range.bot + 1;
+      for (ssize_t v = 0; v < nloci; v++) {
+	 ssize_t k = (v+circ_num)%nloci;
+	 // Check if locus was alreay aligned.
+	 size_t indexpos = (mem->sa[k] - mem->beg) / 50;
+	 int skip_alignment = 0;
+	 for (int ii = 0 ; ii < nseen ; ii++) {
+	    if (indexpos == seen[ii]) {
+	       skip_alignment = 1;
 	       break;
+	    }
 	 }
-	 circ_num++;
-      }
+	 if (skip_alignment) {
+	    if (DEBUG_VERBOSE) {
+	       fprintf(stdout, "locus %ld already aligned: skipping\n--\n",
+		       mem->sa[k]-mem->beg);
+	    }
+	    break;
+	 }
+	 else if (nseen < 50) {
+	    seen[nseen++] = indexpos;
+	 }
+	 align_t alignment = (align_t){mem->sa[k], mem->end - mem->beg + 1, minscore, mem};
+	 if (DEBUG_VERBOSE) {
+	    char * strpos  = chr_string(alignment.refpos, idx.chr);
+	    fprintf(stdout, "alignment: refpos: %ld (%s), span: %ld, MEM minscore: %d\n",
+		    alignment.refpos, strpos, alignment.span, minscore);
+	    free(strpos);
+	 }
 
-      // Check if best alignment is 100% unique
-      if (best_score >= repeats_minscore) {
-	 best->pos = 0;
+	 align(alignment, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
+	    
+	 // Stop alignments if necessary conditions met
+	 if (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
+	    break;
       }
+      circ_num++;
+   }
+
+   // Check if best alignment is 100% unique
+   if (best_score >= repeats_minscore) {
+      best->pos = 0;
    }
 
    // Copy genomic sequences for best alignments.
