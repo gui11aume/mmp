@@ -287,18 +287,18 @@ new_estimate_N0
 )
 {
 
-   int fwd = l1->end - l1->beg + 1;
+   int fwd = l1.end - l1.beg + 1;
 
    double a = 1. - pow(1-mu,fwd);
    double b = 1. - pow(1-mu,fwd-1);
 
    int N1 = log(log(a)/log(b)) / (log(b) - log(a)) -1;
 
-   if (l1->beg == 0) {
+   if (l1.beg == 0) {
       // No need to go reverse: the answer will be the same.
       // We switch gear and use Newton-Raphson iterations.
       long int m = l1.range.top-l1.range.bot - 1;
-      double p = pow(1-mu,len);
+      double p = pow(1-mu, fwd);
       double N = N1;
       for (int j = 0 ; j < 8 ; j++) {
          double fN = digamma(N+1)-digamma(N-m+1) + log(1.-p);
@@ -308,7 +308,7 @@ new_estimate_N0
       return (uN0_t) {mu, N, 1.};
    }
 
-   int bwd = l2->end - l2->beg + 1;
+   int bwd = l2.end - l2.beg + 1;
 
    a = 1. - pow(1-mu,bwd);
    b = 1. - pow(1-mu,bwd-1);
@@ -337,10 +337,6 @@ new_estimate_N0
    double p0 = prob_1 / (prob_1 + prob_2 + 8*prob_3);
 
    return (uN0_t) {mu, N0, p0};
-
-in_case_of_failure:
-   // Return an impossible value.
-   return (uN0_t) {0./0., -1, 0./0.};
 
 }
 
@@ -465,6 +461,19 @@ cmpN0
 
 }
 
+double
+quality_quick
+(
+         int     memlen,
+         int     N0
+)
+{
+  const double u = 0.06;
+  double phit = pow(1.-PROB, memlen);
+  double prep = 1.-pow(1.-pow(1-u,memlen), N0);
+  return phit / (phit + (1.-phit)*prep);
+}
+    
 
 //seedp_t
 double
@@ -472,7 +481,8 @@ quality
 (
          aln_t   aln,
    const char *  seq,
-         index_t idx
+         index_t idx,
+         int     N0
 )
 {
 
@@ -482,18 +492,7 @@ quality
    assert(slen >= GAMMA);
 
    double u = 0.06;
-
-   uN0_t uN0p0 = new_estimate_N0(aln.refseq, slen, idx, u);
-   int N0 = uN0p0.N0;
-   double p0 = uN0p0.lev;
-
-   if (aln.score > 0) {
-      uN0_t read_uN0p0 = new_estimate_N0(seq, slen, idx, u);
-      if (read_uN0p0.N0 > N0 || read_uN0p0.lev > p0) {
-         N0 = read_uN0p0.N0;
-         p0 = read_uN0p0.lev; 
-      }
-   }
+   double p0 = 0.0;
 
    if (N0 < 2 || slen < 51) {
 
@@ -737,27 +736,28 @@ batchmap
 
       // Return if no seeds were found
       if (seeds->pos == 0) {
-	 // Did not find anything.
+      // Did not find anything.
          free(seeds);
          fprintf(stdout, "%s\tNA\tNA\n", seq);
          continue;
       }
 
       // Compute N(L1,L2)
-      N0 = new_estimate_N0(l1,l2,idx,0.06);
+      uN0_t uN0 = new_estimate_N0(l1, l2, idx, 0.06);
+      int N0 = uN0.N0;
 
       // Quick mode: only align longest MEMs
       int mem_length = -1;
       if (N0 > QUICK_DUPLICATES) 
-	 mem_length = filter_longest_mem(mems);
+        mem_length = filter_longest_mem(seeds);
 
-      alnstack_t * alnstack = mapread(mems, seq, idx, rlen);
+      alnstack_t * alnstack = mapread(seeds, seq, idx, rlen);
 
       // Did not find anything.
       if (alnstack->pos == 0) {
-         free(alnstack);
-         fprintf(stdout, "%s\tNA\tNA\n", seq);
-         continue;
+        free(alnstack);
+        fprintf(stdout, "%s\tNA\tNA\n", seq);
+        continue;
       }
 
       // Pick a top alignment at "random".
@@ -775,11 +775,10 @@ batchmap
          }
       }
 
-      // XXXXXXXXXXXXXXXX TODO: IMPLEMENT QUALITY AND QUALITY QUICK
       if (there_is_only_one_best_hit)
-	 a.qual = N0 > QUICK_DUPLICATES ? quality_quick(a, seq, idx, mem_length, N0) : quality(a, seq, idx, N0);
+        a.qual = N0 > QUICK_DUPLICATES ? quality_quick(mem_length, N0) : quality(a, seq, idx, N0);
       else
-	 a.qual = 1-1./alnstack->pos;
+        a.qual = 1-1./alnstack->pos;
 	 
       // Report mapping results
       char * apos = chr_string(a.refpos, idx.chr);

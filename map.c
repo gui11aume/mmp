@@ -497,7 +497,7 @@ extend_l1l2
 
    // Backward <<<
    range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
-   int i = 0;
+   i = 0;
    for ( ; i < len ; i++) {
       if (NONALPHABET[(uint8_t)seq[i]]) break;
       int c = REVCMP[(uint8_t) seq[i]];
