@@ -14,11 +14,9 @@ debug: $(P)
 profile: CFLAGS += -pg -O0 -DNOQUAL
 profile: $(P)
 
-noqual: CFLAGS += -DNDEBUG -DNOQUAL -O3
-noqual: $(P)
-
 $(P): smmfdp.c bwt.h $(OBJECTS)
 	$(CC) $(CFLAGS) smmfdp.c $(OBJECTS) -o $(P) -lm
+#	$(CC) $(CFLAGS) smmfdp.c $(OBJECTS) -o $(P) -Wl,--no-as-needed -lprofiler -lm
 
 clean:
 	rm -f $(OBJECTS) $(P)

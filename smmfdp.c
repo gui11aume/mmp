@@ -7,7 +7,7 @@
 #include "divsufsort.h"
 #include "sesame.h"
 
-#define GAMMA 17
+#define GAMMA 19
 #define PROBDEFAULT 0.01
 #define SKIPQUALDEFAULT 10
 #define QUICK_DUPLICATES 20
@@ -63,7 +63,7 @@ typedef struct seedp_t seedp_t;
 struct uN0_t {
    double u;
    size_t N0;
-   double lev;
+   double p0;
 };
 
 struct seedp_t {
@@ -79,7 +79,6 @@ char* HELP_MSG =
    "\n"
    "mapping options:\n"
    "  -e  sets the expected error rate (default: 0.01)\n"
-   "  -q  sets the threshold qual1ty to use skip seeds (default 10)\n"
    "\n";
    
 
@@ -289,10 +288,10 @@ new_estimate_N0
 
    int fwd = l1.end - l1.beg + 1;
 
-   double a = 1. - pow(1-mu,fwd);
-   double b = 1. - pow(1-mu,fwd-1);
+   double a = 1. - pow(1-mu,fwd+1);
+   double b = 1. - pow(1-mu,fwd);
 
-   int N1 = log(log(a)/log(b)) / (log(b) - log(a)) -1;
+   int N1 = log(log(a)/log(b)) / (log(b) - log(a));
 
    if (l1.beg == 0) {
       // No need to go reverse: the answer will be the same.
@@ -310,17 +309,17 @@ new_estimate_N0
 
    int bwd = l2.end - l2.beg + 1;
 
-   a = 1. - pow(1-mu,bwd);
-   b = 1. - pow(1-mu,bwd-1);
+   a = 1. - pow(1-mu,bwd+1);
+   b = 1. - pow(1-mu,bwd);
 
-   int N2 = log(log(a)/log(b)) / (log(b) - log(a)) -1;
+   int N2 = log(log(a)/log(b)) / (log(b) - log(a));
 
    // Estimate N0.
-   int N0 = N1 > N2 ? N1 : N2;
+   int N0 = (N1 + N2) / 2;
 
    // Compute p0 (prob of the min).
-   int m = fwd < bwd ? fwd-1 : bwd-1;
-   size_t G = idx.chr->gsize;
+   int m = fwd < bwd ? fwd : bwd;
+   size_t G = idx.chr->gsize * 2;
    // Probability of the event if there is one duplicate.
    double prob_1 = mu * pow(1-mu, 2*m) * pow(1-pow(.25, m), G) +
       (1-pow(1-mu,m)) * pow(1-mu,m) * (pow(1-pow(.25,m+1), G) - pow(1-pow(.25,m), G)) +
@@ -336,113 +335,48 @@ new_estimate_N0
    // is duplicated with exactly 1 duplicate.
    double p0 = prob_1 / (prob_1 + prob_2 + 8*prob_3);
 
-   return (uN0_t) {mu, N0, p0};
+   return (uN0_t) {.06, N0, p0};
+
 
 }
 
 
-uN0_t
-estimate_uN0
+int
+test_20mer_uniqueness
 (
    const char    * seq,
    const index_t   idx
 )
 {
 
-   const size_t n = 21;
-   const double mu = .06;
-
-   size_t L1, L2, R1, R2;
-   L1 = L2 = R1 = R2 = 0;
-   int mlen;
-
    size_t merid = 0;
+   int mlen;
 
    // Look up the beginning (reverse) of the query in lookup table.
    for (mlen = 0 ; mlen < LUTK ; mlen++) {
       // Note: every "N" is considered a "A".
-      uint8_t c = ENCODE[(uint8_t) seq[30-mlen-1]];
+      uint8_t c = ENCODE[(uint8_t) seq[20-mlen-1]];
       merid = c + (merid << 2);
    }
    range_t range = idx.lut->kmer[merid];
 
-   for ( ; mlen < 30 ; mlen++) {
+   for ( ; mlen < 20 ; mlen++) {
       // When there are "N" in the reference, the estimation
       // must bail out because we cannot find the answer.
-      if (NONALPHABET[(uint8_t) seq[30-mlen-1]])
+      if (NONALPHABET[(uint8_t) seq[20-mlen-1]])
          goto in_case_of_failure;
-      int c = ENCODE[(uint8_t) seq[30-mlen-1]];
+      int c = ENCODE[(uint8_t) seq[20-mlen-1]];
       range.bot = get_rank(idx.occ, c, range.bot - 1);
       range.top = get_rank(idx.occ, c, range.top) - 1;
       // If only 1 hit remains, we can bail out.
-      if (range.bot == range.top) break;
-      if (mlen == 20) {
-         L1 = range.top - range.bot;
-         L2 = n * L1;
-      }
-      if (mlen > 20) {
-         L2 += range.top - range.bot;
-      }
+      if (range.bot >= range.top) return 1;
    }
 
-   L1 -= (range.top - range.bot);
-
-   merid = 0;
-
-   // Look up the beginning (forward) of the query in lookup table.
-   for (mlen = 0 ; mlen < LUTK ; mlen++) {
-      // Note: every "N" is considered a "T".
-      uint8_t c = REVCMP[(uint8_t) seq[mlen]];
-      merid = c + (merid << 2);
-   }
-   range = idx.lut->kmer[merid];
-
-   for ( ; mlen < 30 ; mlen++) {
-      // When there are "N" in the reference, the estimation
-      // must bail out because we cannot find the answer.
-      if (NONALPHABET[(uint8_t) seq[mlen]])
-         goto in_case_of_failure;
-      int c = REVCMP[(uint8_t) seq[mlen]];
-      range.bot = get_rank(idx.occ, c, range.bot - 1);
-      range.top = get_rank(idx.occ, c, range.top) - 1;
-      // If only 1 hit remains, we can bail out.
-      if (range.bot == range.top) break;
-      if (mlen == 20) {
-         R1 = range.top - range.bot;
-         R2 = n * R1;
-      }
-      if (mlen > 20) {
-         R2 += range.top - range.bot;
-      }
-   }
-
-   R1 -= (range.top - range.bot);
-
-   double C = (1 - pow(1-.06,n)) / (n * pow(1-.06,n-1));
-
-   double L3 = L2 / (1-mu) - L1 / mu;
-   double R3 = R2 / (1-mu) - R1 / mu;
-
-   // Compute the number of duplicates.
-   double N0 = (L1+R1 + C*(L3+R3)) / 2.0;
-   if (N0 < 1.0) N0 = 1.0;
-
-   // TODO: precompute some of this?
-   double loglik = 2 * lgamma(N0+1) + (L1+R1) * log(mu) +
-      (L2+R2) * log(1-mu) + (2*N0-L1-R1) * log(1-pow(1-mu,n)) -
-      (lgamma(N0-L1+1) + lgamma(N0-R1+1));
-
-
-   size_t G = idx.chr->gsize;
-   double H0l = 2 * lgamma(G+1) + (L1+R1) * log(.75) +
-      (L2+R2) * log(.25) + (2*G-L1-R1) * log(1-pow(.25,n)) -
-      (lgamma(G-L1+1) + lgamma(G-R1+1));
-
-   return (uN0_t) { mu, N0, H0l-loglik };
+   // Target is not unique.
+   return 0;
 
 in_case_of_failure:
-   // Return an impossible value.
-   return (uN0_t) { 0. / 0., -1,  0. / 0.};
+   return -1;
 
 }
 
@@ -464,14 +398,13 @@ cmpN0
 double
 quality_quick
 (
-         int     memlen,
-         int     N0
+         int   len,
+         uN0_t uN0
 )
 {
-  const double u = 0.06;
-  double phit = pow(1.-PROB, memlen);
-  double prep = 1.-pow(1.-pow(1-u,memlen), N0);
-  return phit / (phit + (1.-phit)*prep);
+  double u = uN0.u; // Convenience.
+  double a = len * (1 - pow(1 - u*u/3*pow(1-u, len-1), uN0.N0));
+  return a / (1.+a);
 }
     
 
@@ -480,9 +413,9 @@ double
 quality
 (
          aln_t   aln,
-   const char *  seq,
+   const char *  seq,  // Read.
          index_t idx,
-         int     N0
+         uN0_t   uN0_read
 )
 {
 
@@ -491,192 +424,162 @@ quality
    assert(slen < 250);
    assert(slen >= GAMMA);
 
-   double u = 0.06;
-   double p0 = 0.0;
+   int tot = (slen/10) - 2;
+   int yes_max_evidence_N_is_0 = 1;
+   double prob_p0 = .5;
 
-   if (N0 < 2 || slen < 51) {
-
-      uN0_t uN0[50] = {{0}};
-
-      // Assume the worst (many similar duplicates).
-      const double worst_case_mu = 0.02;
-      const size_t worst_case_N0 = 2147483645;
-
-      int tot = 0;
-      int yes_max_evidence_N_is_0 = 1;
-
-      // Estimate N and mu.
-      for (int s = 0 ; s <= slen-30 ; s += 10, tot++) {
-         uN0[tot] = estimate_uN0(aln.refseq + s, idx);
-         // Failsafe when estimation fails (e.g., because of "N").
-         if (uN0[tot].u != uN0[tot].u) {
-            uN0[tot] = (uN0_t) { worst_case_mu, worst_case_N0, 0 };
-         }
-         // The threshold is the maximum possible value
-         // of the evidence that N0 = 0 for each segment.
-         const double threshold = 
-            2.* (idx.chr->gsize) * log(1-pow(.25,21)) + 0.63683;
-         if (uN0[tot].lev < threshold - .01) yes_max_evidence_N_is_0 = 0;
+   for (int s = 0 ; s <= slen-20 ; s += 10) {
+      int unique = test_20mer_uniqueness(aln.refseq + s, idx);
+      if (!unique) {
+        yes_max_evidence_N_is_0 = 0;
+        break;
       }
+      prob_p0 *= .29; // = .94^20
+   }
 
-		qsort(uN0, tot, sizeof(uN0_t), cmpN0);
-		int imax = tot-1;
-		for ( ; imax > 0 ; imax--) {
-			if (uN0[imax].N0 < worst_case_N0) break;
-		}   
-
-		N0 = uN0[imax/2].N0;
-		u = uN0[imax/2].u;
-      if (N0 > 1) p0 = 1.;
-
-      if (yes_max_evidence_N_is_0 && slen >= 30) {
-         // Those are the "super reads".
-         const int mm = 1 + tot/2;
-         if (aln.score == 0) {
-            // Odd number of 30 nt triplets: we place a mm in the
-            // event triplets. There are 11 positions on the first
-            // and the last triplets, 10 positions on the internal
-            // ones. The number of ways to choose the positions is
-            // 11^2 * 10^{mm-2}. Those are mm errors (occurrence
-            // PROB), the other nucleotides are correct (occurrence
-            // 1-PROB). The duplicate has two compensating mutations
-            // at those positions (occurrence u/3), the other
-            // positions are not mutations (occurrence 1-u). We
-            // divide by the probability that the read has score 0,
-            // approximately equal to the probability that there is
-            // no mutation. We also divide by the probability that
-            // p0 is small, approximately 2/3 per segment.
-            // Note that we divide 'tot' by 3 to approximate
-            // the dependence between consecutive segments.
-            // We also count a 1/10 probability that the read is
-            // repeated with the specified level of u and with
-            // only one extra copy.
+   if (yes_max_evidence_N_is_0 && slen >= 30) {
+      // Those are the "super reads".
+      const int mm = 1 + tot/2;
+      if (aln.score == 0) {
+         // Odd number of 20 nt block: we place a mm in the
+         // event triplets. There are 11 positions on the first
+         // and the last triplets, 10 positions on the internal
+         // ones. The number of ways to choose the positions is
+         // 11^2 * 10^{mm-2}. But we just say that every odd
+         // block has 11 positions. Those are mm errors (occurrence
+         // PROB), the other nucleotides are correct (occurrence
+         // 1-PROB). The duplicate has compensating mutations
+         // at those positions (occurrence u/3), the other
+         // positions are not mutations (occurrence 1-u). We
+         // divide by the probability that the read has score 0,
+         // approximately equal to the probability that there is
+         // no mutation. We also divide by the probability that
+         // p0 is small, approximately 2/3 per segment.
+         // Note that we divide 'tot' by 3 to approximate
+         // the dependence between consecutive segments.
+         // We also count a 1/10 probability that the read is
+         // repeated with the specified level of u and with
+         // only one extra copy.
+         double u = mm / (double) slen; // Worst value of 'u'.
+         return .06 * pow(11*PROB*u/3 / (1-PROB), mm) *
+                     pow(1-u,slen-mm) / pow(.666,tot/3.);
+         // 0.1 * (11*pu/3)^mm * (1-u)^k-mm * (1-p)^k-mm /
+         // (1-p)^k * 2/3^tot/3
+      }
+      else if (aln.score == 1) {
+         // Case 1: the mismatch is in the second (or but-to-last)
+         // segment, no further than GAMMA from the border. An
+         // error can occur if the mismatch is an error (frequency p)
+         // combined with an uncompensated mutation (2u/3). Other
+         // hidden compensated errors are in the even segments.
+         // Case 2: the mismatch is somewhere else. The most likely
+         // scenario for an error is that the mismatch is a mutation
+         // (frequency u) and that there are two hidden and
+         // compensated errors in even semgnents.
+         // We need to divide by the probability of occurrence,
+         // approximately equal to the probability that the read
+         // contains one error at the given position  and that all
+         // the segments report N=0 (frequency 2/3 each).
+         // Note that we divide 'tot' by 3 to approximate the
+         // dependence between consecutive segments.
+         // We also count a 1/10 probability that the read is
+         // repeated with the specified level of u and with
+         // only one extra copy.
+         int errpos = aln.read_beg == 0 ? aln.read_end+1 : aln.read_beg-1;
+         int case_1 = (errpos >= 10 && errpos < GAMMA) ||
+            (errpos < slen-10 && errpos >= slen-GAMMA);
+         if (case_1) {
             double u = mm / (double) slen; // Worst value of 'u'.
-            return .06 * pow(11*PROB*u/3 / (1-PROB), mm) *
-                        pow(1-u,slen-mm) / pow(.666,tot/3.);
-            // 0.1 * (11*pu/3)^mm * (1-u)^k-mm * (1-p)^k-mm /
-            // (1-p)^k * 2/3^tot/3
+            return .1 * 2*u/3 * pow(11*PROB*u/3 / (1-PROB), mm-1) *
+                  pow(1-u, slen-mm) / pow(.666,tot/3.);
+            // .1 * 2*(GAMMA-10) * 2*pu/3 * (11*pu/3)^mm-1 * (1-u)^k-mm *
+            // (1-p)^k-mm / 2*(GAMMA-10) * p*(1-p)^k-1 * 2/3^tot/3
          }
-         else if (aln.score == 1) {
-            // Case 1: the mismatch is in the second (or but-to-last)
-            // segment, no further than GAMMA = 17 from the border. An
-            // error can occur if the mismatch is an error (frequency p)
-            // combined with an uncompensated mutation (2u/3). Other
-            // hidden compensated errors are in the even segments.
-            // Case 3: the mismatch is somewhere else. The most likely
-            // scenario for an error is that the mismatch is a mutation
-            // (frequency u) and that it there are two hidden and
-            // compensated errors in even semgnents.
-            // We need to divide by the probability of occurrence,
-            // approximately equal to the probability that the read
-            // contains one error at the given position  and that all
-            // the segments report N=0 (frequency 2/3 each).
-            // Note that we divide 'tot' by 3 to approximate the
-            // dependence between consecutive segments.
-            // We also count a 1/10 probability that the read is
-            // repeated with the specified level of u, and that has
-            // only one duplicate.
-            int errpos = aln.read_beg == 0 ? aln.read_end+1 : aln.read_beg-1;
-            int case_1 = (errpos >= 10 && errpos < 17) ||
-               (errpos < slen-10 && errpos >= slen-17);
-            const int mm = (tot+1)/2;
-            if (case_1) {
-               double u = mm / (double) slen; // Worst value of 'u'.
-               return 0.2 * 2*u/3 * pow(11*PROB*u/3 / (1-PROB), mm-1) *
-                     pow(1-u, slen-mm) / pow(.666,tot/3.);
-               // FIXME: formula is wrong, check. XXX //
-               // 14 * 2*pu/3 * (11*pu/3)^mm-1 * (1-u)^k-mm *
-               // (1-p)^k-mm / 14 * p*(1-p)^k-1 * 2/3^tot/3
-            }
-            else {
-               double u = (mm+1) / (double) slen; // Worst value of 'u'.
-               return 0.2 * pow(11*PROB*u/3 / (1-PROB), mm) * u*(1-PROB) *
-                     pow(1-u,slen-mm-1) / PROB / pow(.666,tot/3.);
-               // FIXME: formula is wrong, check. XXX //
-               // (k-14) * u*(1-p) * (11*pu/3)^mm * (1-u)^k-mm-1 *
-               // (1-p)^k-mm-1 / (k-14) * p*(1-p)^k-1 * 2/3^tot/3
-            }
+         else {
+            double u = (mm+1) / (double) slen; // Worst value of 'u'.
+            return 0.1 * pow(11*PROB*u/3 / (1-PROB), mm) * u*(1-PROB) *
+                  pow(1-u,slen-mm-1) / PROB / pow(.666,tot/3.);
+            // .1 * (k-2*(GAMMA-10)) * u*(1-p) * (11*pu/3)^mm * (1-u)^k-mm-1 *
+            // (1-p)^k-mm-1 / (k-2*(GAMMA-10)) * p*(1-p)^k-1 * 2/3^tot/3
          }
-         else if (aln.score == 2) {
-            const int mm = (tot+1)/2;
-            double u = mm / (double) slen; // Worst value of 'u'.
-            // There are several ways this can be wrong, but we collapse
-            // it to an "average" case with compensated errors in all
-            // even segments except one. This last segment contains a
-            // mutation and an uncompensated error.
-            if (slen < 50);
-            else if (slen == 50) {
-               // Special case where there are 231 possibilities in
-               // the order mutation, error, compensated error, plus
-               // 84 possibilities in the order error, mutation,
-               // compensated error (two times by symmetry).
-               return 0.2 * 2*315*u/3*u*(1-u/3)*pow(1-u,47) / 
-                     slen / (slen-1) / pow(.666,tot/3.);
-            }
-            else {
-               return mm * 6*pow(11*PROB*u/3 / (1-PROB), mm) *
-                     pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) / 
-                     slen / (slen-1) / pow(.666,tot/3.);
-               // 0.1 *mm*11*10*(1-p)*u * p*(1-u/3) * (11*pu/3)^{mm-1} *
-               // (1-u)^k-mm-1 * (1-p)^k-mm-1 / k*(k-1)/2*p^2*(1-p)^k-2 *
-               // 2/3^tot/3
-            }
+      }
+      else if (aln.score == 2) {
+         double u = mm / (double) slen; // Worst value of 'u'.
+         // There are several ways this can be wrong, but we collapse
+         // it to an "average" case with compensated errors in all
+         // even segments except one. This last segment contains a
+         // mutation and an uncompensated error.
+         if (slen < 50);
+         else if (slen == 50) {
+            // Special case where there are 231 possibilities in
+            // the order mutation, error, compensated error, plus
+            // 84 possibilities in the order error, mutation,
+            // compensated error (two times by symmetry).
+            return 0.2 * 2*315*u/3*u*(1-u/3)*pow(1-u,47) / 
+                  slen / (slen-1) / pow(.666,tot/3.);
+         }
+         else {
+            return mm * 6*pow(11*PROB*u/3 / (1-PROB), mm) *
+                  pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) / 
+                  slen / (slen-1) / pow(.666,tot/3.);
+            // 0.1 *mm*11*10*(1-p)*u * p*(1-u/3) * (11*pu/3)^{mm-1} *
+            // (1-u)^k-mm-1 * (1-p)^k-mm-1 / k*(k-1)/2*p^2*(1-p)^k-2 *
+            // 2/3^tot/3
          }
       }
    }
 
-   if (N0 == 0) N0 = 1;
+   double u = uN0_read.u;
+   int N0 = uN0_read.N0;
+   double p0 = uN0_read.p0;
 
+   // Estimate N0 on the hit.
+   seed_t L1, L2;
+   extend_L1L2(aln.refseq, idx, &L1, &L2);
+   uN0_t uN0_hit = new_estimate_N0(L1, L2, idx, u);
+   if (uN0_hit.N0 * uN0_hit.p0 > N0 * p0) {
+      N0 = uN0_hit.N0;
+      p0 = uN0_hit.p0; 
+   }
 
-   // Probability that the true location is not the best.
-   int m = aln.score + 1;
-   // Probability that there are m+1 errors on the read.
-   double pm = exp(lgamma(slen+1) - lgamma(m+1) -
-      lgamma(slen-m+1) + m*log(PROB) + (slen-m) * log(1-PROB));
-   // Probability that exactly one of them is compensated (so
-   // that a duplicate has a lower score than the target).
-   double pbetter = (1.-pow(1.-u/3,m)) * pow(1.-u, slen-m);
-   double pswap = 1. - pow(1.-pbetter, N0);
-   double ptrue_not_best = pm * pswap;
+   if (yes_max_evidence_N_is_0) {
+     N0 = 1;
+     prob_p0 = (prob_p0 + p0) / 2;
+   }
+   else {
+     prob_p0 = p0;
+   }
 
-   // Condition by the probability that the read has at
-   // the given number of errors.
-   double cond = exp(lgamma(slen+1) -lgamma(aln.score+1)
-      -lgamma(slen-aln.score+1) +
-      aln.score*log(PROB) + (slen-aln.score)*log(1-PROB));
+   if (aln.score == 0) {
+     // Special case for perfect alignment score.
+     const double cond = pow(1-PROB, slen);
+     double p1 = slen * PROB * pow(1-PROB, slen-1);
+     double p2 = u/3. * pow(1-u, slen-1);
+     return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
+   }
+
    double poff = auto_mem_seed_offp(slen, u, N0);
-
-   // Count only the evidence from the nucleotides that were
-   // actually aligned (those in the seed are already taken
-   // into account in the Sesame prior probability). For MEM,
-   // count one obligatory error because of the end of the seed.
-   // For skip seeds, consider that only one seed was used to
-   // discover the locus.
 
    // Weight of the evidence if mapping is correct...
    double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
    // ... if mapping is on a duplicate...
-   double B = aln.score * log(u)   + (slen-aln.score) * log(1-u);
+   double B = aln.score * log(u) + (slen-aln.score) * log(1-u);
    // ... and if mapping is random.
    int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
       slen - aln.read_end + aln.read_beg - 2 :
       slen - aln.read_end + aln.read_beg - 3;
    double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
 
-   // XXX TESTING SOME RANDOM STUFF XXX //
-   if (A > B) A = B;
+   if (A - B > 1.) A = B + 1.;
 
-   // Here 'term3' uses non-informative prios instead of Sesame
-   // priors for the sake of simplicity. In practice, 'term3' is
+   // Here 'term2' uses non-informative prios instead of Sesame
+   // priors for the sake of simplicity. In practice, 'term2' is
    // either very close to 0 or very close to 1 and the priors
    // do not matter.
-   double term1 = p0 * poff / ( poff + exp(A-B)*(1-poff) );
-   double term2 = p0 * ptrue_not_best / cond;
-   double term3 = aln.score < slen / 5 ? 0 : 1. / (1. + exp(A-C));
+   double term1 = prob_p0 * poff / ( poff + exp(A-B)*(1-poff) );
+   double term2 = aln.score < slen / 5 ? 0 : 1. / (1. + exp(A-C));
 
-   double max = term1 > term2 ? term1 : term2;
-   return max + term3 > 1. ? 1. : max + term3;
-
+   return term1 + term2 > 1. ? 1. : term1 + term2;
 
 }
 
@@ -698,7 +601,8 @@ batchmap
    if (inputf == NULL) exit_cannot_open(readsfname);
 
 #ifdef DEBUG
-   fprintf(stdout, "smmfdp: index=%s, reads=%s, perror=%f, skip-thr=%f\n", indexfname, readsfname, PROB, SKIPQUAL);
+   fprintf(stdout, "smmfdp: index=%s, reads=%s, perror=%f, "
+       "skip-thr=%f\n", indexfname, readsfname, PROB, SKIPQUAL);
 #endif
    
    size_t sz = 64;
@@ -729,7 +633,7 @@ batchmap
 
       // Compute L1, L2 and MEMs.
       seed_t l1, l2;
-      extend_l1l2(seq, idx, &l1, &l2);
+      extend_L1L2(seq, idx, &l1, &l2);
 
       // Compute seeds.
       wstack_t * seeds = mem_seeds(seq, idx, GAMMA);
@@ -743,13 +647,14 @@ batchmap
       }
 
       // Compute N(L1,L2)
-      uN0_t uN0 = new_estimate_N0(l1, l2, idx, 0.06);
-      int N0 = uN0.N0;
+      const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
+      uN0_t uN0 = new_estimate_N0(l1, l2, idx, lambda);
 
       // Quick mode: only align longest MEMs
       int mem_length = -1;
-      if (N0 > QUICK_DUPLICATES) 
+      if (uN0.N0 > QUICK_DUPLICATES) {
         mem_length = filter_longest_mem(seeds);
+      }
 
       alnstack_t * alnstack = mapread(seeds, seq, idx, rlen);
 
@@ -775,10 +680,14 @@ batchmap
          }
       }
 
-      if (there_is_only_one_best_hit)
-        a.qual = N0 > QUICK_DUPLICATES ? quality_quick(mem_length, N0) : quality(a, seq, idx, N0);
-      else
+      if (there_is_only_one_best_hit) {
+      a.qual = uN0.N0 > QUICK_DUPLICATES ?
+        quality_quick(mem_length, uN0) :
+        quality(a, seq, idx, uN0);
+      }
+      else {
         a.qual = 1-1./alnstack->pos;
+      }
 	 
       // Report mapping results
       char * apos = chr_string(a.refpos, idx.chr);

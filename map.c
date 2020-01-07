@@ -451,12 +451,12 @@ chain_skip
 }
 
 void
-extend_l1l2
+extend_L1L2
 (
  const char   * seq,
  const index_t  idx,
- seed_t       * l1,
- seed_t       * l2
+ seed_t       * L1,
+ seed_t       * L2
 )
 {
    int len = strlen(seq);
@@ -465,52 +465,85 @@ extend_l1l2
    range_t range = {0};
    range_t newrange = {0};
 
-   // Backward search from end.
-   l1->end = len-1;
+   int i;
+   size_t merid;
 
    // L1.
-   range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
-   int i = len - 1;
+   L1->end = len-1;
+
+   // Look up the beginning (reverse) of the query in lookup table.
+   merid = 0;
+   for (int j = 0 ; j < LUTK ; j++) {
+      // Note: every "N" is considered "A".
+      uint8_t c = ENCODE[(uint8_t) seq[len-j-1]];
+      merid = c + (merid << 2); 
+   }   
+
+   range = idx.lut->kmer[merid];
+
+   if (range.top < range.bot) {
+      range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
+      i = len-1;
+   }
+   else {
+      i = len-1 - LUTK;
+   }
+
    for ( ; i >= 0 ; i--) {
       if (NONALPHABET[(uint8_t)seq[i]]) break;
       int c = ENCODE[(uint8_t) seq[i]];
       newrange.bot = get_rank(idx.occ, c, range.bot - 1);
       newrange.top = get_rank(idx.occ, c, range.top) - 1;
-      // Stop if no hits.
+      // Stop if fewer than 2 hits.
       if (newrange.top < newrange.bot + 1)
-	 break;
+         break;
       range = newrange;
    }
 
-   l1->beg = i+1;
-   l1->range = range;
+   L1->beg = i+1;
+   L1->range = range;
 
    // Check L1 result
-   if (l1->end - l1->beg + 1 == len) {
-      l2->beg = l1->beg;
-      l2->end = l1->end;
+   if (L1->end - L1->beg + 1 == len) {
+      L2->beg = L1->beg;
+      L2->end = L1->end;
       return;
    }
 
    // L2.
-   l2->beg = 0;
+   L2->beg = 0;
 
-   // Backward <<<
-   range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
-   i = 0;
+   // Look up the beginning (forward) of the query in lookup table.
+   merid = 0;
+   for (int j = 0 ; j < LUTK ; j++) {
+      // Note: every "N" is considered "A".
+      uint8_t c = REVCMP[(uint8_t) seq[j]];
+      merid = c + (merid << 2); 
+   }   
+
+   range = idx.lut->kmer[merid];
+
+   if (range.top < range.bot) {
+      range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
+      i = 0;
+   }
+   else {
+      i = LUTK;
+   }
+
    for ( ; i < len ; i++) {
       if (NONALPHABET[(uint8_t)seq[i]]) break;
       int c = REVCMP[(uint8_t) seq[i]];
       newrange.bot = get_rank(idx.occ, c, range.bot - 1);
       newrange.top = get_rank(idx.occ, c, range.top) - 1;
-      // Stop if no hits.
+      // Stop if fewer than 2 hist.
       if (newrange.top < newrange.bot + 1)
 	 break;
       range = newrange;
    }
 
-   l2->end = i-1;
-   l2->range = range;
+   L2->end = i-1;
+   L2->range = range;
 
    return;
    
@@ -877,20 +910,26 @@ filter_longest_mem
  wstack_t * seeds
 )
 {
-   // Find longest MEMs in seeds.
-   int n_mems = seeds->pos;
-   int maxlen = 0;
-   for (int i = 0; i < n_mems; i++) {
-      seed_t * s = seeds->ptr[i];
-      int seedlen = s->end - s->beg + 1;
-      if (seedlen > maxlen) {
-	 maxlen = seedlen;
-	 seeds->pos = 0;
-      }
-      seeds->ptr[seeds->pos++] = s;
-   }
-
-   return maxlen;
+  if (seeds->pos == 0) return 0;
+  // Find longest MEMs in seeds.
+  int n_mems = seeds->pos;
+  seed_t * bestseed = seeds->ptr[0];
+  int maxlen = bestseed->end - bestseed->beg + 1;
+  for (int i = 1; i < n_mems; i++) {
+    seed_t * s = seeds->ptr[i];
+    int len = s->end - s->beg + 1;
+    if (len > maxlen) {
+      maxlen = len;
+      free(bestseed);
+      bestseed = s;
+    }
+    else {
+      free(s);
+    }
+  }
+  seeds->ptr[0] = bestseed;
+  seeds->pos = 1;
+  return maxlen;
 }
 
 alnstack_t *
