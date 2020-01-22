@@ -13,7 +13,7 @@
 #define QUICK_DUPLICATES 20
 
 // Index parameters
-#define OCC_INTERVAL_SIZE 8
+#define OCC_INTERVAL_SIZE 16
 
 // ------- Machine-specific code ------- //
 // The 'mmap()' option 'MAP_POPULATE' is available
@@ -279,24 +279,24 @@ load_index
 uN0_t
 new_estimate_N0
 (
- seed_t         l1,
- seed_t         l2,
+ seed_t         L1,
+ seed_t         L2,
  const index_t  idx,
  const double   mu
 )
 {
 
-   int fwd = l1.end - l1.beg + 1;
+   int fwd = L1.end - L1.beg + 1;
 
    double a = 1. - pow(1-mu,fwd+1);
    double b = 1. - pow(1-mu,fwd);
 
    int N1 = log(log(a)/log(b)) / (log(b) - log(a));
 
-   if (l1.beg == 0) {
+   if (L1.beg == 0) {
       // No need to go reverse: the answer will be the same.
       // We switch gear and use Newton-Raphson iterations.
-      long int m = l1.range.top-l1.range.bot - 1;
+      long int m = L1.range.top - L1.range.bot - 1;
       double p = pow(1-mu, fwd);
       double N = N1;
       for (int j = 0 ; j < 8 ; j++) {
@@ -307,7 +307,7 @@ new_estimate_N0
       return (uN0_t) {mu, N, 1.};
    }
 
-   int bwd = l2.end - l2.beg + 1;
+   int bwd = L2.end - L2.beg + 1;
 
    a = 1. - pow(1-mu,bwd+1);
    b = 1. - pow(1-mu,bwd);
@@ -334,6 +334,10 @@ new_estimate_N0
    // this because there is ~1:9 chance that the sequence
    // is duplicated with exactly 1 duplicate.
    double p0 = prob_1 / (prob_1 + prob_2 + 8*prob_3);
+
+   // No nonsense. If just one error can explain the difference
+   // between the estimates, assume that this error exists.
+   if (L2.end + 2 >= L1.beg) p0 = 1.;
 
    return (uN0_t) {.06, N0, p0};
 
@@ -398,13 +402,28 @@ cmpN0
 double
 quality_quick
 (
-         int   len,
-         uN0_t uN0
+   int      slen,
+   seed_t * mem,
+   uN0_t    uN0
 )
 {
-  double u = uN0.u; // Convenience.
-  double a = len * (1 - pow(1 - u*u/3*pow(1-u, len-1), uN0.N0));
-  return a / (1.+a);
+
+  int len = mem->end - mem->beg + 1;
+  double l = uN0.u*(1-PROB) + PROB*(1-uN0.u/3); // lambda
+  double a = 0;
+  int nends = (mem->beg == 0) + (mem->end == slen-1);
+  switch (nends) {
+    case 0:
+      a = len * (1-PROB) * (1 - pow(1 - l*l*l/3*pow(1-l, len-1), uN0.N0));
+      return a / (PROB + a);
+    case 1:
+      a = len * (1 - pow(1 - l*l/3*pow(1-l, len-1), uN0.N0));
+      return a / (1 + a);
+    case 2:
+      a = len * PROB * (1 - pow(1 - l/3*pow(1-l, len-1), uN0.N0));
+      return a / (1-PROB + a);
+  }
+  return 0./0.; // Oops...
 }
     
 
@@ -438,6 +457,14 @@ quality
    }
 
    if (yes_max_evidence_N_is_0 && slen >= 30) {
+      // NB: for the super reads, we assume a frequency of 10%
+      // in the genome. For Drosophila this is much more, for
+      // human this is approximately half the value of Drosophila
+      // and for pine this is 25x less. So this value is actually
+      // genome-dependent. One way to get to it would just be to
+      // count the proportion of reads that go to the super category
+      // and plug the value in the formula. But we would need to 
+      // buffer the first ~10,000 reads to get to this estimate.
       // Those are the "super reads".
       const int mm = 1 + tot/2;
       if (aln.score == 0) {
@@ -461,12 +488,13 @@ quality
          // repeated with the specified level of u and with
          // only one extra copy.
          double u = mm / (double) slen; // Worst value of 'u'.
-         return .06 * pow(11*PROB*u/3 / (1-PROB), mm) *
-                     pow(1-u,slen-mm) / pow(.666,tot/3.);
-         // 0.1 * (11*pu/3)^mm * (1-u)^k-mm * (1-p)^k-mm /
-         // (1-p)^k * 2/3^tot/3
+         return .1 * pow(10*PROB*u/3 / (1-PROB), mm) *
+                     pow(1-u,slen-mm);
+         // 0.1 * (11*pu/3)^mm * (1-u)^k-mm * (1-p)^k-mm / (1-p)^k
       }
       else if (aln.score == 1) {
+         // Here we also have to consider the probability that there
+         // would be a seed for the target. That makes it complex.
          // Case 1: the mismatch is in the second (or but-to-last)
          // segment, no further than GAMMA from the border. An
          // error can occur if the mismatch is an error (frequency p)
@@ -474,14 +502,8 @@ quality
          // hidden compensated errors are in the even segments.
          // Case 2: the mismatch is somewhere else. The most likely
          // scenario for an error is that the mismatch is a mutation
-         // (frequency u) and that there are two hidden and
-         // compensated errors in even semgnents.
-         // We need to divide by the probability of occurrence,
-         // approximately equal to the probability that the read
-         // contains one error at the given position  and that all
-         // the segments report N=0 (frequency 2/3 each).
-         // Note that we divide 'tot' by 3 to approximate the
-         // dependence between consecutive segments.
+         // (frequency u) and that there are hidden and
+         // compensated errors in even segments.
          // We also count a 1/10 probability that the read is
          // repeated with the specified level of u and with
          // only one extra copy.
@@ -490,17 +512,17 @@ quality
             (errpos < slen-10 && errpos >= slen-GAMMA);
          if (case_1) {
             double u = mm / (double) slen; // Worst value of 'u'.
-            return .1 * 2*u/3 * pow(11*PROB*u/3 / (1-PROB), mm-1) *
-                  pow(1-u, slen-mm) / pow(.666,tot/3.);
-            // .1 * 2*(GAMMA-10) * 2*pu/3 * (11*pu/3)^mm-1 * (1-u)^k-mm *
-            // (1-p)^k-mm / 2*(GAMMA-10) * p*(1-p)^k-1 * 2/3^tot/3
+            return .1 * 2*u/3 * pow(10*PROB*u/3 / (1-PROB), mm-1) *
+                  pow(1-u, slen-mm);
+            // .1 * 2*pu/3 * (11*pu/3)^mm-1 * (1-u)^k-mm *
+            // (1-p)^k-mm / p*(1-p)^k-1
          }
          else {
             double u = (mm+1) / (double) slen; // Worst value of 'u'.
-            return 0.1 * pow(11*PROB*u/3 / (1-PROB), mm) * u*(1-PROB) *
-                  pow(1-u,slen-mm-1) / PROB / pow(.666,tot/3.);
-            // .1 * (k-2*(GAMMA-10)) * u*(1-p) * (11*pu/3)^mm * (1-u)^k-mm-1 *
-            // (1-p)^k-mm-1 / (k-2*(GAMMA-10)) * p*(1-p)^k-1 * 2/3^tot/3
+            return .1 * 2*pow(10*PROB*u/3 / (1-PROB), mm) * u*(1-PROB) *
+                  pow(1-u,slen-mm-1) / PROB;
+            // .1 * 2*u*(1-p) * (11*pu/3)^mm * (1-u)^k-mm-1 *
+            // (1-p)^k-mm-1 / p*(1-p)^k-1
          }
       }
       else if (aln.score == 2) {
@@ -516,15 +538,14 @@ quality
             // 84 possibilities in the order error, mutation,
             // compensated error (two times by symmetry).
             return 0.2 * 2*315*u/3*u*(1-u/3)*pow(1-u,47) / 
-                  slen / (slen-1) / pow(.666,tot/3.);
+                  slen / (slen-1);
          }
          else {
             return mm * 6*pow(11*PROB*u/3 / (1-PROB), mm) *
                   pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) / 
-                  slen / (slen-1) / pow(.666,tot/3.);
+                  slen / (slen-1);
             // 0.1 *mm*11*10*(1-p)*u * p*(1-u/3) * (11*pu/3)^{mm-1} *
-            // (1-u)^k-mm-1 * (1-p)^k-mm-1 / k*(k-1)/2*p^2*(1-p)^k-2 *
-            // 2/3^tot/3
+            // (1-u)^k-mm-1 * (1-p)^k-mm-1 / k*(k-1)/2*p^2*(1-p)^k-2
          }
       }
    }
@@ -628,12 +649,12 @@ batchmap
       if (rlen > maxlen) {
          maxlen = rlen;
          // (Re)initialize library.
-         sesame_set_static_params(GAMMA, rlen, PROB);
+         sesame_set_static_params(GAMMA, maxlen, PROB);
       }
 
       // Compute L1, L2 and MEMs.
-      seed_t l1, l2;
-      extend_L1L2(seq, idx, &l1, &l2);
+      seed_t L1, L2;
+      extend_L1L2(seq, idx, &L1, &L2);
 
       // Compute seeds.
       wstack_t * seeds = mem_seeds(seq, idx, GAMMA);
@@ -648,12 +669,12 @@ batchmap
 
       // Compute N(L1,L2)
       const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
-      uN0_t uN0 = new_estimate_N0(l1, l2, idx, lambda);
+      uN0_t uN0 = new_estimate_N0(L1, L2, idx, lambda);
 
       // Quick mode: only align longest MEMs
-      int mem_length = -1;
+      seed_t *longest_mem = NULL;
       if (uN0.N0 > QUICK_DUPLICATES) {
-        mem_length = filter_longest_mem(seeds);
+        longest_mem = filter_longest_mem(seeds);
       }
 
       alnstack_t * alnstack = mapread(seeds, seq, idx, rlen);
@@ -682,7 +703,7 @@ batchmap
 
       if (there_is_only_one_best_hit) {
       a.qual = uN0.N0 > QUICK_DUPLICATES ?
-        quality_quick(mem_length, uN0) :
+        quality_quick(strlen(seq), longest_mem, uN0) :
         quality(a, seq, idx, uN0);
       }
       else {

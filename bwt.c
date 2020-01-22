@@ -133,8 +133,8 @@ compress_sa
    
    uint8_t lastbit = 0;
    size_t  nb = 0;
-   // Sample every 16-th value.
-   for (size_t pos = 0 ; pos < txtlen ; pos += 16) {
+   // Sample every 32-th value.
+   for (size_t pos = 0 ; pos < txtlen ; pos += 32) {
       int64_t current = sa[pos];
       // Store the compact representation.
       csa->bitf[nb] |= current << lastbit;
@@ -200,7 +200,7 @@ create_occ
    uint64_t word_size = 64;
    uint64_t mark_bits = mark_intv * word_size;
 
-   // Allocate new 'Occ_t'.
+   // Allocate new 'occ_t'.
    const uint64_t txtlen = bwt->txtlen;
    const uint64_t nintv = (txtlen + mark_bits - 1) / mark_bits;
    const uint64_t nword = nintv * mark_intv;
