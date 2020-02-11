@@ -1,4 +1,4 @@
-P= smmfdp
+P= mmp
 
 CC= gcc
 CFLAGS= -std=c99 -Wall
@@ -14,9 +14,9 @@ debug: $(P)
 profile: CFLAGS += -pg -O0 -DNOQUAL
 profile: $(P)
 
-$(P): smmfdp.c bwt.h $(OBJECTS)
-	$(CC) $(CFLAGS) smmfdp.c $(OBJECTS) -o $(P) -lm
-#	$(CC) $(CFLAGS) smmfdp.c $(OBJECTS) -o $(P) -Wl,--no-as-needed -lprofiler -lm
+$(P): mmp.c bwt.h $(OBJECTS)
+	$(CC) $(CFLAGS) mmp.c $(OBJECTS) -o $(P) -lm
+#	$(CC) $(CFLAGS) mmp.c $(OBJECTS) -o $(P) -Wl,--no-as-needed -lprofiler -lm
 
 clean:
 	rm -f $(OBJECTS) $(P)
