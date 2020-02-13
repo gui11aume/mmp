@@ -277,7 +277,7 @@ load_index
 }
 
 uN0_t
-new_estimate_N0
+estimate_N0
 (
  seed_t         L1,
  seed_t         L2,
@@ -400,7 +400,7 @@ cmpN0
 }
 
 double
-quality_quick
+quality_low
 (
    int      slen,
    seed_t * mem,
@@ -557,7 +557,7 @@ quality
    // Estimate N0 on the hit.
    seed_t L1, L2;
    extend_L1L2(aln.refseq, idx, &L1, &L2);
-   uN0_t uN0_hit = new_estimate_N0(L1, L2, idx, u);
+   uN0_t uN0_hit = estimate_N0(L1, L2, idx, u);
    if (uN0_hit.N0 * uN0_hit.p0 > N0 * p0) {
       N0 = uN0_hit.N0;
       p0 = uN0_hit.p0; 
@@ -669,7 +669,7 @@ batchmap
 
       // Compute N(L1,L2)
       const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
-      uN0_t uN0 = new_estimate_N0(L1, L2, idx, lambda);
+      uN0_t uN0 = estimate_N0(L1, L2, idx, lambda);
 
       // Quick mode: only align longest MEMs
       seed_t *longest_mem = NULL;
@@ -703,7 +703,7 @@ batchmap
 
       if (there_is_only_one_best_hit) {
       a.qual = uN0.N0 > QUICK_DUPLICATES ?
-        quality_quick(strlen(seq), longest_mem, uN0) :
+        quality_low(strlen(seq), longest_mem, uN0) :
         quality(a, seq, idx, uN0);
       }
       else {
