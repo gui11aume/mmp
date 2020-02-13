@@ -396,6 +396,35 @@ chr_string
    return str;
 }
 
+pos_t
+get_pos
+(
+  size_t   refpos,
+  chr_t  * chr
+)
+{
+   if (chr->nchr == 0)
+      return (pos_t) {0};
+
+   int strand = 1; // Forward.
+
+   if (refpos > chr->gsize) {
+      strand = 0; // Reverse.
+      refpos = 2*chr->gsize - refpos - 1;
+   }
+      
+   int chrnum = 0;
+   if (chr->nchr > 1) {
+      chrnum = bisect_search(0, chr->nchr-1, chr->start, refpos+1)-1;
+   }
+   size_t chrpos = refpos+1 - (chr->start[chrnum]-1);
+   return (pos_t) {
+     .rname = chr->name[chrnum],
+     .pos = chrpos,
+     .strand = strand
+   };
+}
+
 size_t
 get_rank
 (

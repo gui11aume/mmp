@@ -1,3 +1,4 @@
+#define VERSION "1.0"
 #define _GNU_SOURCE
 
 #include <math.h>
@@ -75,11 +76,13 @@ static double PROB = PROBDEFAULT;
 static double SKIPQUAL = SKIPQUALDEFAULT;
 
 char* HELP_MSG =
-   "usage: mmp ([-e 0.01] index-file file.fasta | --index index-file)\n"
-   "\n"
-   "mapping options:\n"
-   "  -e: expected error rate (default: 0.01)\n"
-   "\n";
+  "Usage:\n"
+  "   index:  mmp  --index  index.fasta\n"
+  "   map:    mmp [-e 0.01] index.fasta reads.fasta\n"
+  "\n"
+  "Options:\n"
+  "  -e: sequencing error rate (default: 0.01)\n"
+  "\n";
    
 
 double digamma(double);
@@ -275,6 +278,7 @@ load_index
 	 .occ = occ, .lut = lut, .dna = dna};
 
 }
+
 
 uN0_t
 estimate_N0
@@ -621,11 +625,6 @@ batchmap
    FILE * inputf = fopen(readsfname, "r");
    if (inputf == NULL) exit_cannot_open(readsfname);
 
-#ifdef DEBUG
-   fprintf(stdout, "mmp: index=%s, reads=%s, perror=%f, "
-       "skip-thr=%f\n", indexfname, readsfname, PROB, SKIPQUAL);
-#endif
-   
    size_t sz = 64;
    ssize_t rlen;
    char * seq = malloc(64);
@@ -635,14 +634,31 @@ batchmap
    size_t maxlen = 0; // Max 'k' value for seeding probabilities.
 
    // Read sequence file line by line.
+   char noqual[] = "*";
+   char * seqname = NULL;
+   char * phred = NULL;
+
+   // Output sam header.
+   for (int i = 0 ; i < idx.chr->nchr; i++) {
+     size_t sz = i >= idx.chr->nchr-1 ?
+       idx.chr->gsize - idx.chr->start[i] :
+       idx.chr->start[i+1] - idx.chr->start[i];
+     fprintf(stdout, "@SQ\tSN:%s\tLN:%ld\n", idx.chr->name[i], sz);
+   }
+
    while ((rlen = getline(&seq, &sz, inputf)) != -1) {
-      
+     
       // Remove newline character if present.
       if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
 
       // If fasta header, print sequence name.
       if (seq[0] == '>') {
-         fprintf(stdout, "%s\t", seq+1);
+         seqname = strdup(seq+1);
+         phred = noqual;
+         if (seqname == NULL) {
+           fprintf(stderr, "memory error\n");
+           exit(EXIT_FAILURE);
+         }
          continue;
       }
 
@@ -661,10 +677,12 @@ batchmap
 
       // Return if no seeds were found
       if (seeds->pos == 0) {
-      // Did not find anything.
-         free(seeds);
-         fprintf(stdout, "%s\tNA\tNA\n", seq);
-         continue;
+        // Did not find anything.
+        free(seeds);
+        // Output in sam format.
+        fprintf(stdout, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+            seqname, seq, phred);
+        continue;
       }
 
       // Compute N(L1,L2)
@@ -682,7 +700,9 @@ batchmap
       // Did not find anything.
       if (alnstack->pos == 0) {
         free(alnstack);
-        fprintf(stdout, "%s\tNA\tNA\n", seq);
+        // Output in sam format.
+        fprintf(stdout, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+            seqname, seq, phred);
         continue;
       }
 
@@ -711,9 +731,14 @@ batchmap
       }
 	 
       // Report mapping results
-      char * apos = chr_string(a.refpos, idx.chr);
-      fprintf(stdout, "%s\t%s\t%d\t%e\n", seq, apos, a.score, a.qual);
-      free(apos);
+      pos_t pos = get_pos(a.refpos, idx.chr);
+      // Output in sam format.
+      int bits = pos.strand ? 0 : 16;
+      fprintf(stdout, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
+         seqname, bits, pos.rname, pos.pos, (int) (-10*log10(a.qual)),
+         rlen-1, seq, phred, a.score);
+
+      free(seqname);
 
       // Free alignments
       for(size_t i = 0; i < alnstack->pos; i++)
@@ -745,8 +770,10 @@ main
    }
 
    if (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")) {
-      fprintf(stdout, "%s", HELP_MSG);
-   } else if (strcmp(argv[1], "--index") == 0) {
+      fprintf(stderr, "MEM Mapper Prototype version %s\n", VERSION);
+      fprintf(stderr, "%s", HELP_MSG);
+   }
+   else if (strcmp(argv[1], "--index") == 0) {
       if (argc < 3) {
          fprintf(stderr, "Specify file to index.\n");
          exit(EXIT_FAILURE);

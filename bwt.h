@@ -31,6 +31,7 @@ typedef struct occ_t      occ_t;
 typedef struct chr_t      chr_t;
 typedef struct range_t    range_t;
 typedef struct wstack_t   wstack_t;
+typedef struct pos_t pos_t;
 
 typedef unsigned int uint_t;
 
@@ -139,6 +140,12 @@ struct wstack_t {
    void   * ptr[];
 };
 
+struct pos_t {
+   char   * rname;
+   int      strand;
+   size_t   pos;
+};
+
 
 
 // VISIBLE FUNCTION DECLARATIONS //
@@ -154,14 +161,15 @@ char       * decompress_genome(char *, size_t, size_t);
 chr_t      * index_load_chr(const char *);
 void         free_index_chr(chr_t *);
 char       * chr_string(size_t, chr_t*);
+pos_t        get_pos(size_t, chr_t*);
 
 size_t       get_rank(const occ_t *, uint8_t, size_t);
 range_t      backward_search(const char *, const size_t, const occ_t *);
 size_t       query_csa(csa_t*, bwt_t*, occ_t*, size_t);
 size_t     * query_csa_range(csa_t *, bwt_t *, occ_t *, range_t);
 
-wstack_t   *  stack_new    (size_t max);
-void          push         (void * ptr, wstack_t ** stackp);
+wstack_t   * stack_new    (size_t max);
+void         push         (void * ptr, wstack_t ** stackp);
 
 
 #endif
