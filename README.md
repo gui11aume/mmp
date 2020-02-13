@@ -9,17 +9,19 @@
 ## I. Prototype? What do you mean? ##
 
 `mmp` is a proper mapper, we use it in the lab and you are more than
-welcome to use it as well. When we say ``prototype'', we mean that
-our purpose was to show that faithful mapping is achievable, and not
-really to secure a stable user base.
+welcome to use it as well. When we say ‘prototype’, we mean that
+our purpose was not really to secure a stable user base, but rather to
+show that faithful mapping is achievable.
 
-Below are the main limitations of `mmp` compared to mainstream mappers:
+Below are the main things to consider before using `mmp`:
+
     1. It works only with single-end reads.
     2. The whole read is aligned, there is no trimming.
-    3. There is no way to increase the sensitivity.
+    3. There is no way to change the sensitivity.
 
 For now, the only accepted input format is fasta, but we'll fix that soon
-and allow fastq. Also, it is single core, but we'll also fix that soon.
+and allow fastq as well. Also, it is single core, but we'll also fix that
+soon.
 
 Otherwise, `mmp` is pretty good. The most important feature is that it
 is approximately faithful, so you should be able to trust the mapping
@@ -34,16 +36,19 @@ many mainstream mappers.
 II. Compilation and installation
 ---------------------------------
 
-To install `mmp`, clone this git repository:
+To install `mmp`, open a terminal and clone this git repository:
 
  > git clone https://github.com/gui11aume/mmp
 
-The files should be downloaded in a folder named 'mmp'. Use make to
+The files should be downloaded in a folder named `mmp`. Use `make` to
 compile:
 
  > make
 
-A binary file `mmp` will be created.
+A binary file `mmp` will be created. We made sure that `mmp` does not
+depend on external libraries. It is written in C and all the code you
+need is in the repository, so this should work on every variant of
+Linux.
 
 
 III. Running `mmp`
@@ -72,8 +77,9 @@ following command:
 
   > ./mmp genome.fasta reads.fasta
 
-You can change the error rate with the option `-e`. For instance, if you
-know that it shold be 2%, then the command should be:
+This produces a sam file printed on `stdout`. You can change the error
+rate with the option `-e`. For instance, if you know that it is 2%,
+then the command should be:
 
   > ./mmp -e 0.02 genome.fasta reads.fasta
 
