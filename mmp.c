@@ -75,10 +75,10 @@ static double PROB = PROBDEFAULT;
 static double SKIPQUAL = SKIPQUALDEFAULT;
 
 char* HELP_MSG =
-   "usage: smmfdp ([-e 0.01] [-q 10] index-file file.fasta | --index index-file)\n"
+   "usage: mmp ([-e 0.01] index-file file.fasta | --index index-file)\n"
    "\n"
    "mapping options:\n"
-   "  -e  sets the expected error rate (default: 0.01)\n"
+   "  -e: expected error rate (default: 0.01)\n"
    "\n";
    
 
@@ -622,7 +622,7 @@ batchmap
    if (inputf == NULL) exit_cannot_open(readsfname);
 
 #ifdef DEBUG
-   fprintf(stdout, "smmfdp: index=%s, reads=%s, perror=%f, "
+   fprintf(stdout, "mmp: index=%s, reads=%s, perror=%f, "
        "skip-thr=%f\n", indexfname, readsfname, PROB, SKIPQUAL);
 #endif
    
