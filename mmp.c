@@ -6,7 +6,6 @@
 
 #include "bwt.h"
 #include "map.h"
-#include "divsufsort.h"
 #include "sesame.h"
 
 #define GAMMA 19
