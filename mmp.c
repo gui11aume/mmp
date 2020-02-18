@@ -3,6 +3,7 @@
 
 #include <math.h>
 
+
 #include "bwt.h"
 #include "map.h"
 #include "divsufsort.h"
@@ -107,6 +108,10 @@ build_index
    char buff[256];
    size_t gsize;
 
+   // TODO: Convert in parameter
+   size_t sa_chunksize = 50000000; // 10^9 uint32 (4GB)
+   size_t sa_chunktail = 10000;
+
    // Read and normalize genome
    sprintf(buff, "%s.chr", fname);
    fprintf(stderr, "reading genome... ");
@@ -132,69 +137,36 @@ build_index
    free(dna);
    fprintf(stderr, "done.\n");
 
-   fprintf(stderr, "creating suffix array... ");
-   int64_t * sa = compute_sa(genome);
-   fprintf(stderr, "done.\n");
+   // Create SA chunks
+   fprintf(stderr, "creating suffix array blocks...\n");
+   int nchunks = compute_sa_chunks(genome, fname, sa_chunksize, sa_chunktail);
+   fprintf(stderr, "\rdone       \n");
 
-   fprintf(stderr, "creating bwt... ");
-   bwt_t * bwt = create_bwt(genome, sa);
-   fprintf(stderr, "done.\n");
-
+   // Merge SA and create CSA, OCC, BWT
+   fprintf(stderr, "suffix array merge...\n");
+   merge_sa_chunks(genome, fname, sa_chunksize, nchunks, OCC_INTERVAL_SIZE);
+   fprintf(stderr, "\rdone.     \n");
    free(genome);
+   
+   // Load OCC
+   sprintf(buff, "%s.occ", fname);
+   int focc = open(buff, O_RDONLY);
+   if (focc < 0) exit_cannot_open(buff);
 
-   fprintf(stderr, "creating Occ table... ");
-   occ_t * occ = create_occ(bwt, OCC_INTERVAL_SIZE);
-   fprintf(stderr, "done.\n");
+   ssize_t mmsz = lseek(focc, 0, SEEK_END);
+   occ_t *occ = (occ_t *) mmap(NULL, mmsz, PROT_READ, MMAP_FLAGS, focc, 0);
+   exit_error(occ == NULL);
+   close(focc);
+   
 
+   // Create LUT
    fprintf(stderr, "filling lookup table... ");
    lut_t * lut = malloc(sizeof(lut_t));
    fill_lut(lut, occ, (range_t) {.bot=1, .top=gsize}, 0, 0);
    fprintf(stderr, "done.\n");
 
-   fprintf(stderr, "compressing suffix array... ");
-   csa_t * csa = compress_sa(sa);
-   fprintf(stderr, "done.\n");
-
-   free(sa);
-
-   // Write the compressed suffix array file.
-   sprintf(buff, "%s.sa", fname);
-   int fsar = creat(buff, 0644);
-   if (fsar < 0) exit_cannot_open(buff);
-
-   ws = 0;
-   sz = sizeof(csa_t) + csa->nint64 * sizeof(int64_t);
-   data = (char *) csa;
-   while (ws < sz) ws += write(fsar, data + ws, sz - ws);
-   close(fsar);
-
-   free(csa);
-
-   // Write the Burrows-Wheeler transform.
-   sprintf(buff, "%s.bwt", fname);
-   int fbwt = creat(buff, 0644);
-   if (fbwt < 0) exit_cannot_open(buff);
-
-   ws = 0;
-   sz = sizeof(bwt_t) + bwt->nslots * sizeof(uint8_t);
-   data = (char *) bwt;
-   while (ws < sz) ws += write(fbwt, data + ws, sz - ws);
-   close(fbwt);
-
-   free(bwt);
-
-   // Write the Occ table.
-   sprintf(buff, "%s.occ", fname);
-   int focc = creat(buff, 0644);
-   if (focc < 0) exit_cannot_open(buff);
-
-   ws = 0;
-   sz = sizeof(occ_t) + occ->occ_size*SIGMA*sizeof(uint64_t);
-   data = (char *) occ;
-   while (ws < sz) ws += write(focc, data + ws, sz - ws);
-   close(focc);
-
-   free(occ);
+   // Unmap occ
+   munmap(lut, mmsz);
 
    // Write the lookup table
    sprintf(buff, "%s.lut", fname);
@@ -207,8 +179,8 @@ build_index
    while (ws < sz) ws += write(flut, data + ws, sz - ws);
    close(flut);
 
+   // Free memory
    free(lut);
-
 }
 
 

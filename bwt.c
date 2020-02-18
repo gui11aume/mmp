@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 #include <assert.h>
-#include "divsufsort.h"
+#include <unistd.h>
+#include <stdio.h>
+#include "lib/divsufsort.h"
 #include "bwt.h"
 
 
@@ -15,6 +17,8 @@ const char REVCMP[256] = { ['g'] = 1, ['c'] = 2, ['a'] = 3,
 
 
 // SECTION 1. MACROS //
+
+#define min(x,y) (x) < (y) ? (x) : (y)
 
 // Error-handling macros.
 #define exit_on_memory_error(x)						\
@@ -89,6 +93,7 @@ const char CAPS[256] = {
 
 // SECTION 3.1 INDEXING FUNCTIONS //
 
+/*
 int64_t *
 compute_sa   // VISIBLE //
 (
@@ -97,14 +102,315 @@ compute_sa   // VISIBLE //
 {
 
    const size_t txtlen = strlen(txt) + 1;
-   int64_t *array = malloc(txtlen * sizeof(uint64_t));
+   saidx_t *array = malloc(txtlen * sizeof(saidx_t));
    exit_on_memory_error(array);
 
    divsufsort((const unsigned char *) txt, array, txtlen);
    return array;
 
 }
+*/
 
+int
+compute_sa_chunks
+(
+ const char * txt,
+ const char * basename,
+ uint64_t     chunksize,
+ uint64_t     tail
+ )
+{
+   // Limit chunksize
+   ssize_t blocksize = min(chunksize+tail, 0xFFFFFFF0);
+   
+   // Prepare text for chunking
+   const size_t txtlen = strlen(txt) + 1;
+   uint64_t ptr = 0;
+   int c = 0, nchunks = txtlen/chunksize + (txtlen%chunksize > 0);
+   char * fname = malloc(strlen(basename)+100);
+   exit_on_memory_error(fname);
+   
+   while (c < nchunks) {
+      // Verbose
+      fprintf(stderr, "\r%d/%d", c, nchunks);
+      // Prepare chunk of text
+      const char * chunk = txt + ptr;
+      ssize_t bsize = min(blocksize, txtlen - ptr);
+      saidx_t * array  = malloc(bsize * sizeof(saidx_t));
+      exit_on_memory_error(array);
+      
+      // Compute SA on chunk
+      divsufsort((const unsigned char *) chunk, array, bsize);
+
+      // Write chunk to disk
+      sprintf(fname, "%s.sa.tmp.%d", basename, c);
+      int fd = open(fname, O_WRONLY | O_CREAT, 0664);
+      ssize_t ws = 0;
+      ssize_t sz = bsize*sizeof(saidx_t);
+      char * data = (char *) array;
+      while (ws < sz)
+	 ws += write(fd, data + ws, sz - ws);
+      close(fd);
+      free(array);
+      
+      // Update pointer (discard tail) and loop counter
+      ptr += chunksize;
+      c   += 1;
+   }
+
+   return nchunks;
+}
+
+int
+fill_buffer
+(
+ u32stack_t * buffer,
+ int fd
+ )
+{
+   ssize_t bytes, wr = 0, wt = buffer->max * sizeof(uint32_t);
+   while (wr<wt) {
+      bytes = read(fd, ((char *)buffer->val)+wr, wt-wr);
+      if (!bytes) {
+	 buffer->max = wr/sizeof(uint32_t);
+	 break;
+      }
+      wr += bytes;
+   }
+   buffer->pos = 0;
+   return buffer->max == 0;
+}
+
+void
+merge_sa_chunks
+(
+ const char * txt,
+ const char * basename,
+ uint64_t     chunksize,
+ int          nchunks,
+ int          occ_mark_intv
+ )
+{
+   ssize_t BUFSIZE = 4096;
+   size_t zero = 0;
+   ssize_t bw = 0, bt = 0;
+
+   // Allocate buffers
+   u32stack_t ** buffer = malloc(nchunks * sizeof(void *));
+   exit_on_memory_error(buffer);
+   for (int i = 0; i < nchunks; i++) {
+      buffer[i] = u32stack_new(BUFSIZE);
+      buffer[i]->pos = buffer[i]->max;
+   }
+
+   // Open file descriptors
+   char * fname = malloc(strlen(basename)+100);
+   exit_on_memory_error(fname);
+   int * fd = malloc(nchunks*sizeof(int));
+   exit_on_memory_error(fd);
+   for (int i = 0; i < nchunks; i++) {
+      sprintf(fname, "%s.sa.tmp.%d", basename, i);
+      fd[i] = open(fname, O_RDONLY);
+   }
+
+   // Open CSA stream
+   const size_t txtlen = strlen(txt) + 1;           // Do not forget $.
+   size_t nbits = 0;
+   while (txtlen > ((uint64_t) 1 << nbits)) nbits++;
+   size_t nnumb = (txtlen + (16-1)) / 16;
+   size_t nint64 = (nbits * nnumb + (64-1)) / 64;
+   uint64_t bmask = ((uint64_t) 0xFFFFFFFFFFFFFFFF) >> (64-nbits);
+   
+   sprintf(fname,"%s.sa", basename);
+   int csa_fd = creat(fname, 0644);
+
+   // struct header
+   bw = write(csa_fd, &nbits, sizeof(size_t));
+   bw = write(csa_fd, &bmask, sizeof(uint64_t));
+   bw = write(csa_fd, &nint64, sizeof(size_t));
+
+   // Open BWT stream
+   const size_t nslots = (txtlen + (4-1)) / 4;
+
+   sprintf(fname,"%s.bwt", basename);
+   int bwt_fd = creat(fname, 0644);
+
+   // struct header 
+   bw = write(bwt_fd, &txtlen, sizeof(size_t));
+   bw = write(bwt_fd, &txtlen, sizeof(size_t)); // bwt_zero
+   bw = write(bwt_fd, &nslots, sizeof(size_t));
+
+   // Open OCC stream
+   uint64_t word_size = 64;
+   uint64_t mark_bits = occ_mark_intv * word_size;
+   const uint64_t nintv = (txtlen + mark_bits - 1) / mark_bits;
+   const uint64_t nword = nintv * occ_mark_intv;
+   const uint64_t nmark = nintv + 1;
+   const size_t occ_size = nword+nmark;
+
+   sprintf(fname, "%s.occ", basename);
+   int occ_fd = creat(fname, 0644);
+   
+   // Struct header
+   bw = write(occ_fd, &txtlen, sizeof(size_t));
+   bw = write(occ_fd, &occ_size, sizeof(uint64_t));
+   bw = write(occ_fd, &occ_mark_intv, sizeof(uint64_t));
+   bw = write(occ_fd, &word_size, sizeof(uint64_t));
+   bw = write(occ_fd, &mark_bits, sizeof(uint64_t));
+   for (int i = 0; i <= SIGMA; i++) //C
+      bw = write(occ_fd, &zero, sizeof(uint64_t));
+
+   // General loop variables
+   int done = 0;
+   uint64_t pos = 0;
+   // CSA loop variables
+   uint8_t csa_lastbit = 0;
+   uint64_t csa_word = 0;
+   // BWT loop variables
+   int64_t bwt_zero;
+   uint8_t bwt_byte = 0;
+   // OCC loop variables
+   int intv_words = SIGMA*(1+occ_mark_intv);
+   uint64_t * occ_intv = calloc(intv_words, sizeof(uint64_t));
+   exit_on_memory_error(occ_intv);
+   uint64_t occ_abs[SIGMA] = {0};
+   // CSA merge loop
+   while (done < nchunks) {
+      int best = -1;
+      ssize_t saidx = 0;
+      
+      // Compute next SA position (chunk comparison)
+      for (int i = 0; i < nchunks; i++) {
+	 if (buffer[i]->max == 0) continue;
+	 // Fill buffers
+	 if (buffer[i]->pos == buffer[i]->max) {
+	    if (fill_buffer(buffer[i], fd[i])) {
+	       done += 1;
+	       continue;
+	    }
+	 }
+	 ssize_t chunk_offset = buffer[i]->val[buffer[i]->pos];
+	 if (chunk_offset > chunksize) { // Discard chunk tails
+	    buffer[i]->pos += 1;
+	    i--;
+	    continue;
+	 }
+	 ssize_t cur_saidx = chunk_offset + chunksize*i;
+	 // Compare buffer top sequences
+	 if (best < 0 || strcmp(txt+saidx, txt+cur_saidx) > 0) {
+	    best = i;
+	    saidx = cur_saidx;
+	 }
+      }
+
+      if (done == nchunks) break;
+      
+      // Consume the best SA index
+      buffer[best]->pos += 1;
+
+      // CSA
+      // Shift first bits of saidx
+      csa_word |= saidx << csa_lastbit;
+      // Update bit offset
+      csa_lastbit += nbits;
+      
+      if (csa_lastbit >= 64) {
+	 // Shift bit position
+	 csa_lastbit = csa_lastbit - 64;
+	 // Write word
+	 bw = write(csa_fd, &csa_word, sizeof(uint64_t));
+	 // Start new word
+	 csa_word = 0;
+	 // Write last bits of saidx
+	 csa_word |= saidx >> (nbits - csa_lastbit);
+      }
+
+      // BWT & OCC
+      uint8_t c = 0;
+      if (saidx != 0) {
+	 c = ENCODE[(uint8_t) txt[saidx-1]];
+	 occ_abs[c]++;
+	 occ_intv[SIGMA + c*occ_mark_intv + pos%occ_mark_intv] |= ((uint64_t)1) << (word_size - 1 - (pos % word_size));
+      } else {
+	 bwt_zero = pos;
+      }
+      bwt_byte |= c << 2*(pos % 4);
+
+      // Write BWT word
+      if ((pos+1) % 4 == 0) {
+	 bw = write(bwt_fd, &bwt_byte, 1);
+	 bwt_byte = 0;
+      }
+
+      // Write OCC word
+      if ((pos+1) % intv_words == 0) {
+	 // Write full interval
+	 bw = 0; bt = intv_words*sizeof(uint64_t);
+	 while(bw<bt) bw += write(occ_fd, ((char *)occ_intv)+bw, bt-bw);
+	 // Prepare next interval
+	 memset(occ_intv, 0, bt);
+	 // Copy absolute position markers
+	 memcpy(occ_intv, occ_abs, SIGMA*sizeof(uint64_t));
+      }
+
+      // Verbose
+      if (pos % 100000 == 0)
+	 fprintf(stderr, "\r%.2f%%", (100.0*pos)/txtlen);
+      
+      // Increase occ/bwt pos counter
+      pos += 1;
+   }
+   
+   // Finish CSA
+   bw = write(csa_fd, &csa_word, sizeof(uint64_t));
+   
+   // Finish BWT
+   if (pos % 4 > 0) {
+      bw = write(bwt_fd, &bwt_byte, 1);      
+   }
+   
+   // Seek back in bwt_fd to write zero position
+   lseek(bwt_fd, sizeof(size_t), SEEK_SET);
+   bw = write(bwt_fd, &bwt_zero, sizeof(size_t));
+   
+   // Finish OCC
+   if (pos % intv_words > 0) {
+      // Write full interval
+      ssize_t bw = 0, bt = intv_words*sizeof(uint64_t);
+      while(bw<bt) bw += write(occ_fd, ((char *)occ_intv)+bw, bt-bw);
+   }
+   // Write last OCC absolute position mark
+   bw = 0; bt = SIGMA*sizeof(uint64_t);
+   while(bw<bt) bw += write(occ_fd, ((char *)occ_abs)+bw, bt-bw);
+   
+   // Compute 'C'.
+   uint64_t C[SIGMA+1];
+   C[0] = 1;
+   for (int i = 1 ; i < SIGMA+1 ; i++)
+      C[i] = C[i-1] + occ_abs[i-1];
+
+   // Seek back in occ_fd to write C table
+   lseek(occ_fd, sizeof(size_t) + 4*sizeof(uint64_t), SEEK_SET);
+   bw = 0; bt = (SIGMA+1)*sizeof(uint64_t);
+   while (bw<bt) bw += write(occ_fd, ((char *)C)+bw, bt-bw);
+   
+   // Close streams
+   close(csa_fd);
+   close(bwt_fd);
+   close(occ_fd);
+
+   // Close and delete SA chunks
+   for (int i = 0; i < nchunks; i++) {
+      close(fd[i]);
+      sprintf(fname, "%s.sa.tmp.%d", basename, i);
+      remove(fname);
+   }
+   // Free memory
+   free(buffer);
+   free(fname);
+   free(fd);
+   free(occ_intv);
+}
 
 csa_t *
 compress_sa
@@ -142,10 +448,10 @@ compress_sa
       lastbit += nbits;
       // Check if word is full.
       if (lastbit >= 64) {
-         lastbit = lastbit - 64;
-         // Complete with remainder or set to 0 (if lastbit = 0).
-         // This will clear the upper bits of array.
-         csa->bitf[++nb] = current >> (nbits - lastbit);
+	 lastbit = lastbit - 64;
+	 // Complete with remainder or set to 0 (if lastbit = 0).
+	 // This will clear the upper bits of array.
+	 csa->bitf[++nb] = current >> (nbits - lastbit);
       }
    }
 
@@ -176,12 +482,12 @@ create_bwt
    // Encode characters with 2 bits.
    for (size_t pos = 0 ; pos < txtlen ; pos++) {
       if (sa[pos] > 0) { 
-         uint8_t c = ENCODE[(uint8_t) txt[sa[pos]-1]];
-         bwt->slots[pos/4] |= c << 2*(pos % 4);
+	 uint8_t c = ENCODE[(uint8_t) txt[sa[pos]-1]];
+	 bwt->slots[pos/4] |= c << 2*(pos % 4);
       }
       else {
-         // Record the position of the zero.
-         bwt->zero = pos;
+	 // Record the position of the zero.
+	 bwt->zero = pos;
       }
    }
 
@@ -234,24 +540,24 @@ create_occ
       // Extract symbol at position 'i' from bwt.
       uint8_t c = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
       if (pos != bwt->zero) {   // (Skip the '$' symbol).
-         occ_abs[c]++;
-         occ_tmp[c] |= ((uint64_t)1) << (word_size - 1 - (pos % word_size));
+	 occ_abs[c]++;
+	 occ_tmp[c] |= ((uint64_t)1) << (word_size - 1 - (pos % word_size));
       }
       if (pos % word_size == word_size - 1) {
-         for (size_t j = 0; j < SIGMA; j++) {
-            occ->occ[j*occ_size + word] = occ_tmp[j];
-            occ_tmp[j] = 0;
-         }
+	 for (size_t j = 0; j < SIGMA; j++) {
+	    occ->occ[j*occ_size + word] = occ_tmp[j];
+	    occ_tmp[j] = 0;
+	 }
 	 word++;
-         interval++;
-         // Write Mark.
-         if (interval == mark_intv) {
-            for (size_t j = 0; j < SIGMA; j++) {
+	 interval++;
+	 // Write Mark.
+	 if (interval == mark_intv) {
+	    for (size_t j = 0; j < SIGMA; j++) {
 	       occ->occ[j*occ_size + word] = occ_abs[j];
 	    }
 	    word++;
-            interval = 0;
-         }
+	    interval = 0;
+	 }
       }
    }
 
@@ -259,14 +565,14 @@ create_occ
    if (bwt->txtlen % word_size) {
       interval++;
       for (size_t j = 0; j < SIGMA; j++) {
-         occ->occ[j*occ_size + word] = occ_tmp[j];
+	 occ->occ[j*occ_size + word] = occ_tmp[j];
       }
       word++;
    }
    if (interval > 0) {
       // Fill the last interval with 0.
       for (size_t i = interval; i < mark_intv; i++) {
-         for (size_t j = 0; j < SIGMA; j++) {
+	 for (size_t j = 0; j < SIGMA; j++) {
 	    occ->occ[j*occ_size + word] = 0;
 	 }
 	 word++;
@@ -293,7 +599,7 @@ chr_t *
 index_load_chr
 (
  const char * index_file
-)
+ )
 {
 
    // Read chromosome index.
@@ -339,8 +645,8 @@ index_load_chr
 void
 free_index_chr
 (
-  chr_t * chr
-)
+ chr_t * chr
+ )
 {
    for (size_t i = 0; i < chr->nchr; i++) {
       free(chr->name[i]);
@@ -358,7 +664,7 @@ bisect_search
  size_t   end,
  size_t * set,
  size_t   value
-)
+ )
 {
    if (start >= end - 1) {
       if (value < set[start]) return start;
@@ -374,7 +680,7 @@ chr_string
 (
  size_t   refpos,
  chr_t  * chr
-)
+ )
 {
    if (chr->nchr == 0)
       return NULL;
@@ -399,9 +705,9 @@ chr_string
 pos_t
 get_pos
 (
-  size_t   refpos,
-  chr_t  * chr
-)
+ size_t   refpos,
+ chr_t  * chr
+ )
 {
    if (chr->nchr == 0)
       return (pos_t) {0};
@@ -419,10 +725,10 @@ get_pos
    }
    size_t chrpos = refpos+1 - (chr->start[chrnum]-1);
    return (pos_t) {
-     .rname = chr->name[chrnum],
-     .pos = chrpos,
-     .strand = strand
-   };
+      .rname = chr->name[chrnum],
+	 .pos = chrpos,
+	 .strand = strand
+	 };
 }
 
 size_t
@@ -431,7 +737,7 @@ get_rank
  const occ_t  * occ_ptr,
  uint8_t  c,
  size_t   pos_unsigned
-)
+ )
 {
    int64_t pos = (int64_t)pos_unsigned;
    // Compute word, bit and absolute marker positions.
@@ -446,7 +752,7 @@ get_rank
       int64_t  offset = 0;
       // Sum bit offsets.
       for (uint64_t i = mrkptr + 1; i < wrdptr; i++)
-         offset += __builtin_popcountl(occ_ptr->occ[i]);
+	 offset += __builtin_popcountl(occ_ptr->occ[i]);
       // Sum partial word.
       offset += __builtin_popcountl(occ_ptr->occ[wrdptr] >> (occ_ptr->occ_word_size - 1 - bit));
       // Returm sum.
@@ -455,10 +761,10 @@ get_rank
       int64_t  offset = 0;
       // Sum partial word.
       if (bit < occ_ptr->occ_word_size - 1)
-         offset += __builtin_popcountl(occ_ptr->occ[wrdptr] << (bit+1));
+	 offset += __builtin_popcountl(occ_ptr->occ[wrdptr] << (bit+1));
       // Sum bit offsets.
       for (uint64_t i = wrdptr + 1; i < mrkptr; i++)
-         offset += __builtin_popcountl(occ_ptr->occ[i]);
+	 offset += __builtin_popcountl(occ_ptr->occ[i]);
       // Return subtraction.
       occ -= offset;
    }
@@ -512,7 +818,7 @@ backward_search
       range.bot = get_rank(occ, c, range.bot - 1);
       range.top = get_rank(occ, c, range.top) - 1;
       if (range.top < range.bot)
-         return range;
+	 return range;
    }
 
    return range;
@@ -537,15 +843,15 @@ query_csa
       size_t lo  = csa->nbits * idx;
       size_t hi  = csa->nbits * (idx+1)-1;
       if (lo/64 == hi/64) {
-         // Entry fits in a single 'uint64_t'.
-         // Use mask to extract the n-bit encoding of the position.
-         return (size_t) csa->bitf[lo/64] >> lo % 64 & csa->bmask;
+	 // Entry fits in a single 'uint64_t'.
+	 // Use mask to extract the n-bit encoding of the position.
+	 return (size_t) csa->bitf[lo/64] >> lo % 64 & csa->bmask;
       }
       else {
-         // Entry is split between two 'uint64_t'.
-         size_t lo_bits = (size_t) csa->bitf[lo/64] >> lo % 64;
-         size_t hi_bits = (size_t) csa->bitf[hi/64] << (64-lo) % 64;
-         return (lo_bits | hi_bits) & csa->bmask;
+	 // Entry is split between two 'uint64_t'.
+	 size_t lo_bits = (size_t) csa->bitf[lo/64] >> lo % 64;
+	 size_t hi_bits = (size_t) csa->bitf[hi/64] << (64-lo) % 64;
+	 return (lo_bits | hi_bits) & csa->bmask;
       }
    }
    uint8_t c = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
@@ -580,15 +886,15 @@ recursive_csa_query
       size_t lo  = csa->nbits * idx;
       size_t hi  = csa->nbits * (idx+1)-1;
       if (lo/64 == hi/64) {
-         // Entry fits in a single 'uint64_t'.
-         // Use mask to extract the n-bit encoding of the position.
-         sa_values[offset] = (size_t) csa->bitf[lo/64] >> lo % 64 & csa->bmask;
+	 // Entry fits in a single 'uint64_t'.
+	 // Use mask to extract the n-bit encoding of the position.
+	 sa_values[offset] = (size_t) csa->bitf[lo/64] >> lo % 64 & csa->bmask;
       }
       else {
-         // Entry is split between two 'uint64_t'.
-         size_t lo_bits = (size_t) csa->bitf[lo/64] >> lo % 64;
-         size_t hi_bits = (size_t) csa->bitf[hi/64] << (64-lo) % 64;
-         sa_values[offset] = (lo_bits | hi_bits) & csa->bmask;
+	 // Entry is split between two 'uint64_t'.
+	 size_t lo_bits = (size_t) csa->bitf[lo/64] >> lo % 64;
+	 size_t hi_bits = (size_t) csa->bitf[hi/64] << (64-lo) % 64;
+	 sa_values[offset] = (lo_bits | hi_bits) & csa->bmask;
       }
       // Add path offset to get original position.
       sa_values[offset] += path_offset;
@@ -695,7 +1001,7 @@ decompress_genome
  char * dna,
  size_t pos,
  size_t len
-)
+ )
 {
    // Allocate output.
    char * seq = malloc(len+1);
@@ -713,7 +1019,7 @@ compress_genome
 (
  char * genome,
  size_t gsize
-)
+ )
 {
    // Allocate nucleotides.
    char * dna = calloc(gsize/4+1, 1);
@@ -731,7 +1037,7 @@ normalize_genome
  FILE   * inputf,
  char   * chrfile,
  size_t * gsize_ptr
-)
+ )
 {
 
    // Read variables.
@@ -762,13 +1068,13 @@ normalize_genome
 	 size_t * gpos = malloc(sizeof(size_t));
 	 *gpos = gsize+1;
 	 push(gpos, &seqstart);
-         continue;
+	 continue;
       }
       if (gbufsize < gsize + rlen) {
-         while (gbufsize < gsize + rlen) gbufsize *= 2;
-         char * rsz = realloc(genome, gbufsize);
-         exit_on_memory_error(rsz);
-         genome = rsz;
+	 while (gbufsize < gsize + rlen) gbufsize *= 2;
+	 char * rsz = realloc(genome, gbufsize);
+	 exit_on_memory_error(rsz);
+	 genome = rsz;
       }
       int one_if_newline = (buffer[rlen-1] == '\n');
       strncpy(genome + gsize, buffer, rlen - one_if_newline);
@@ -880,4 +1186,20 @@ push
 
    stack->ptr[stack->pos++] = ptr;
    return;
+}
+
+u32stack_t *
+u32stack_new
+(
+ size_t max
+)
+{
+   size_t base = sizeof(wstack_t);
+   size_t extra = max * sizeof(uint32_t);
+   u32stack_t * stack = malloc(base + extra);
+   exit_on_memory_error(stack);
+
+   stack->max = max;
+   stack->pos = 0;
+   return stack;
 }

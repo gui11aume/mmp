@@ -31,6 +31,7 @@ typedef struct occ_t      occ_t;
 typedef struct chr_t      chr_t;
 typedef struct range_t    range_t;
 typedef struct wstack_t   wstack_t;
+typedef struct u32stack_t u32stack_t;
 typedef struct pos_t pos_t;
 
 typedef unsigned int uint_t;
@@ -140,6 +141,12 @@ struct wstack_t {
    void   * ptr[];
 };
 
+struct u32stack_t {
+   size_t   pos;
+   size_t   max;
+   uint32_t  val[];
+};
+
 struct pos_t {
    char   * rname;
    int      strand;
@@ -151,7 +158,9 @@ struct pos_t {
 // VISIBLE FUNCTION DECLARATIONS //
 
 csa_t      * compress_sa(int64_t *);
-int64_t    * compute_sa(const char *);
+int          compute_sa_chunks(const char *, const char *, uint64_t, uint64_t);
+int          fill_buffer(u32stack_t *, int);
+void         merge_sa_chunks(const char *, const char *, uint64_t, int, int);
 bwt_t      * create_bwt(const char *, const int64_t *);
 occ_t      * create_occ(const bwt_t *, const int);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
@@ -169,6 +178,7 @@ size_t       query_csa(csa_t*, bwt_t*, occ_t*, size_t);
 size_t     * query_csa_range(csa_t *, bwt_t *, occ_t *, range_t);
 
 wstack_t   * stack_new    (size_t max);
+u32stack_t * u32stack_new (size_t max);
 void         push         (void * ptr, wstack_t ** stackp);
 
 
