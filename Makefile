@@ -2,7 +2,7 @@ P= mmp
 
 CC= gcc
 CFLAGS= -std=c99 -Wall
-OBJECTS= bwt.o map.o divsufsort.o sesame.o
+OBJECTS= bwt.o map.o sesame.o
 
 # development flags: -DNOQUAL -DFASTOUT
 all: CFLAGS += -DNDEBUG -O3
@@ -15,7 +15,7 @@ profile: CFLAGS += -pg -O0 -DNOQUAL
 profile: $(P)
 
 $(P): mmp.c bwt.h $(OBJECTS)
-	$(CC) $(CFLAGS) mmp.c $(OBJECTS) -o $(P) -lm
+	$(CC) $(CFLAGS) mmp.c $(OBJECTS) -o $(P) -lm -Llib -l:libdivsufsort.so
 #	$(CC) $(CFLAGS) mmp.c $(OBJECTS) -o $(P) -Wl,--no-as-needed -lprofiler -lm
 
 clean:
