@@ -759,7 +759,7 @@ batchmap
       int bits = pos.strand ? 0 : 16;
       fprintf(stdout, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
          read.name, bits, pos.rname, pos.pos, (int) (-10*log10(a.qual)),
-         rlen-1, read.seq, read.phred, a.score);
+         rlen, read.seq, read.phred, a.score);
 
       // Free alignments
       for(size_t i = 0; i < alnstack->pos; i++)
