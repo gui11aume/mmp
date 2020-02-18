@@ -16,8 +16,6 @@
 
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 
-// Index parameters
-#define OCC_INTERVAL_SIZE 16
 
 // ------- Machine-specific code ------- //
 // The 'mmap()' option 'MAP_POPULATE' is available
@@ -120,9 +118,10 @@ build_index
    size_t gsize;
 
    // TODO: Convert in parameter
+   // ** chunksize must be less than 2^32-1-tail
    size_t sa_chunksize = 50000000; // 10^9 uint32 (4GB)
    size_t sa_chunktail = 10000;
-
+   
    // Read and normalize genome
    sprintf(buff, "%s.chr", fname);
    fprintf(stderr, "reading genome... ");
@@ -149,13 +148,13 @@ build_index
    fprintf(stderr, "done.\n");
 
    // Create SA chunks
-   fprintf(stderr, "creating suffix array blocks...\n");
+   fprintf(stderr, "computing suffix array blocks...\n");
    int nchunks = compute_sa_chunks(genome, fname, sa_chunksize, sa_chunktail);
    fprintf(stderr, "\rdone       \n");
 
    // Merge SA and create CSA, OCC, BWT
-   fprintf(stderr, "suffix array merge...\n");
-   merge_sa_chunks(genome, fname, sa_chunksize, nchunks, OCC_INTERVAL_SIZE);
+   fprintf(stderr, "merging suffix array...\n");
+   merge_sa_chunks(genome, fname, sa_chunksize, nchunks);
    fprintf(stderr, "\rdone.     \n");
    free(genome);
    
@@ -677,7 +676,7 @@ batchmap
 
    print_sam_header(idx);
 
-   read_t read = {0}; read.phred[0] = '*'; // No quality.
+   read_t read = {{0}}; read.phred[0] = '*'; // No quality.
    int success = 0;
 
    size_t sz = 64;

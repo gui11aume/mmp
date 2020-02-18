@@ -15,6 +15,10 @@
 #ifndef _bwt_HEADER_
 #define _bwt_HEADER_
 
+// Index parameters
+#define OCC_INTERVAL_SIZE 16
+#define CSA_SAMP_RATIO 32
+
 // Size of the alphabet. Note that the code will break if
 // the value is changed. It is indicated here in order
 // to highlight where the alphabet size is important.
@@ -103,6 +107,7 @@ struct csa_t {
    size_t    nbits;      // Bits in encoding.
    uint64_t  bmask;      // Bit mask (lower nbits set to 1).
    size_t    nint64;     // Size of the bit field.
+   size_t    ratio;      // Sampling ratio.
    int64_t   bitf[0];    // Bie field.
 };
 
@@ -144,6 +149,8 @@ struct wstack_t {
 struct u32stack_t {
    size_t   pos;
    size_t   max;
+   size_t   abspos;
+   size_t   absmax;
    uint32_t  val[];
 };
 
@@ -160,7 +167,7 @@ struct pos_t {
 csa_t      * compress_sa(int64_t *);
 int          compute_sa_chunks(const char *, const char *, uint64_t, uint64_t);
 int          fill_buffer(u32stack_t *, int);
-void         merge_sa_chunks(const char *, const char *, uint64_t, int, int);
+void         merge_sa_chunks(const char *, const char *, uint64_t, int);
 bwt_t      * create_bwt(const char *, const int64_t *);
 occ_t      * create_occ(const bwt_t *, const int);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
