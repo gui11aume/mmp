@@ -1,3 +1,12 @@
+## Please use commit 0ae9d185dd44d8e4136bdb28d5479b1de754c7e8 ##
+
+We accidentally broke `mmp` while trying to update it. We are
+really sorry for the inconvenience. We are fixing everything
+as fast as we can. In the meantime, we recommend you use commit
+0ae9d185dd44d8e4136bdb28d5479b1de754c7e8, as this is the last
+one that seems to work.
+
+
 ## MEM Mapper Prototype: mapping short reads, faithfully ##
 ---
 ## Contents: ##
@@ -19,9 +28,7 @@ Below are the main things to consider before using `mmp`:
     2. The whole read is aligned, there is no trimming.
     3. There is no way to change the sensitivity.
 
-For now, the only accepted input format is fasta, but we'll fix that soon
-and allow fastq as well. Also, it is single core, but we'll also fix that
-soon.
+For now, `mmp` is single core, but we'll fix that soon.
 
 Otherwise, `mmp` is pretty good. The most important feature is that it
 is approximately faithful, so you should be able to trust the mapping
@@ -31,6 +38,10 @@ likely to be correct.
 
 Finally, `mmp` is quite fast but it uses a little more memory than
 many mainstream mappers.
+
+You can find more information about `mmp` in the
+[bioRxiv preprint](https://www.biorxiv.org/content/10.1101/2020.02.10.942599v1)
+that describes the mapping strategy.
 
 
 II. Compilation and installation
@@ -72,14 +83,14 @@ Once the genome is indexed, you can start mapping reads in it. For this
 you must know the approximate error rate of the sequencer. By default,
 `mmp` assumes that the error rate is 1%.
 
-If your reads are in a file called `reads.fasta`, you map them with the
+If your reads are in a file called `reads.fastq`, you map them with the
 following command:
 
-  > ./mmp genome.fasta reads.fasta
+  > ./mmp genome.fasta reads.fastq
 
 This produces a sam file printed on `stdout`. You can change the error
 rate with the option `-e`. For instance, if you know that it is 2%,
 then the command should be:
 
-  > ./mmp -e 0.02 genome.fasta reads.fasta
+  > ./mmp -e 0.02 genome.fasta reads.fastq
 
