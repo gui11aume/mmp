@@ -14,6 +14,8 @@
 #define SKIPQUALDEFAULT 10
 #define QUICK_DUPLICATES 20
 
+#define min(a,b) (((a) < (b)) ? (a) : (b))
+
 // Index parameters
 #define OCC_INTERVAL_SIZE 16
 
@@ -61,6 +63,7 @@
 
 typedef struct uN0_t uN0_t;
 typedef struct seedp_t seedp_t;
+typedef struct read_t read_t;
 
 struct uN0_t {
    double u;
@@ -68,10 +71,18 @@ struct uN0_t {
    double p0;
 };
 
+struct read_t {
+   char name[256];
+   char seq[256];
+   char phred[256];
+};
+
 struct seedp_t {
    double off;
    double nul;
 };
+
+enum fmt_t {unset = 0, fasta = 1, fastq = 2};
 
 static double PROB = PROBDEFAULT;
 static double SKIPQUAL = SKIPQUALDEFAULT;
@@ -580,6 +591,61 @@ quality
 
 }
 
+void
+print_sam_header
+(
+   const index_t idx
+)
+{
+   for (int i = 0 ; i < idx.chr->nchr; i++) {
+     size_t sz = i >= idx.chr->nchr-1 ?
+       idx.chr->gsize - idx.chr->start[i] :
+       idx.chr->start[i+1] - idx.chr->start[i];
+     fprintf(stdout, "@SQ\tSN:%s\tLN:%ld\n", idx.chr->name[i], sz);
+   }
+}
+
+
+int
+parse_read
+(
+        FILE   *  inputf,
+   enum fmt_t     format,
+        read_t *  read,
+        char   ** buffaddr,
+        size_t *  sz
+)
+{
+  ssize_t len = 0;
+  char * buff = *buffaddr; // Just because c'mon.
+  if (format == fasta) {
+    // Read 2 lines.
+    len = getline(buffaddr, sz, inputf);
+    if (len == -1) return 0;
+    strncpy(read->name, buff+1, min(255, strcspn(buff+1, " \t\n")));
+    len = getline(buffaddr, sz, inputf);
+    if (len == -1) return -1;
+    strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
+    return 1;
+  }
+  if (format == fastq) {
+    // Read 4 lines.
+    len = getline(buffaddr, sz, inputf);
+    if (len == -1) return 0;
+    strncpy(read->name, buff+1, min(255, strcspn(buff+1, " \t\n")));
+    len = getline(buffaddr, sz, inputf);
+    if (len == -1) return -1;
+    strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
+    len = getline(buffaddr, sz, inputf);
+    if (len == -1) return -1;
+    len = getline(buffaddr, sz, inputf);
+    if (len == -1) return -1;
+    strncpy(read->phred, buff, min(255, strcspn(buff, " \t\n")));
+    return 1;
+  }
+  return -1;
+}
+
 
 void
 batchmap
@@ -597,43 +663,30 @@ batchmap
    FILE * inputf = fopen(readsfname, "r");
    if (inputf == NULL) exit_cannot_open(readsfname);
 
-   size_t sz = 64;
-   ssize_t rlen;
-   char * seq = malloc(64);
-   exit_error(seq == NULL);
-
    size_t counter = 0; // Used for randomizing.
    size_t maxlen = 0; // Max 'k' value for seeding probabilities.
 
-   // Read sequence file line by line.
-   char noqual[] = "*";
-   char * seqname = NULL;
-   char * phred = NULL;
+   // Set the input type.
+   enum fmt_t format = unset;
 
-   // Output sam header.
-   for (int i = 0 ; i < idx.chr->nchr; i++) {
-     size_t sz = i >= idx.chr->nchr-1 ?
-       idx.chr->gsize - idx.chr->start[i] :
-       idx.chr->start[i+1] - idx.chr->start[i];
-     fprintf(stdout, "@SQ\tSN:%s\tLN:%ld\n", idx.chr->name[i], sz);
-   }
+   // Look at the first character.
+   char first = getc(inputf);
+   if (first == '>') format = fasta;
+   if (first == '@') format = fastq;
+   ungetc(first, inputf);
 
-   while ((rlen = getline(&seq, &sz, inputf)) != -1) {
+   print_sam_header(idx);
+
+   read_t read = {0}; read.phred[0] = '*'; // No quality.
+   int success = 0;
+
+   size_t sz = 64;
+   char * buff = malloc(64);
+   exit_error(buff == NULL);
+
+   while ((success = parse_read(inputf, format, &read, &buff, &sz))) {
      
-      // Remove newline character if present.
-      if (seq[rlen-1] == '\n') seq[rlen-1] = '\0';
-
-      // If fasta header, print sequence name.
-      if (seq[0] == '>') {
-         seqname = strdup(seq+1);
-         phred = noqual;
-         if (seqname == NULL) {
-           fprintf(stderr, "memory error\n");
-           exit(EXIT_FAILURE);
-         }
-         continue;
-      }
-
+      size_t rlen = strlen(read.seq);
       if (rlen > maxlen) {
          maxlen = rlen;
          // (Re)initialize library.
@@ -642,10 +695,10 @@ batchmap
 
       // Compute L1, L2 and MEMs.
       seed_t L1, L2;
-      extend_L1L2(seq, idx, &L1, &L2);
+      extend_L1L2(read.seq, idx, &L1, &L2);
 
       // Compute seeds.
-      wstack_t * seeds = mem_seeds(seq, idx, GAMMA);
+      wstack_t * seeds = mem_seeds(read.seq, idx, GAMMA);
 
       // Return if no seeds were found
       if (seeds->pos == 0) {
@@ -653,7 +706,7 @@ batchmap
         free(seeds);
         // Output in sam format.
         fprintf(stdout, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-            seqname, seq, phred);
+            read.name, read.seq, read.phred);
         continue;
       }
 
@@ -667,14 +720,14 @@ batchmap
         longest_mem = filter_longest_mem(seeds);
       }
 
-      alnstack_t * alnstack = mapread(seeds, seq, idx, rlen);
+      alnstack_t * alnstack = mapread(seeds, read.seq, idx, rlen);
 
       // Did not find anything.
       if (alnstack->pos == 0) {
         free(alnstack);
         // Output in sam format.
         fprintf(stdout, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-            seqname, seq, phred);
+            read.name, read.seq, read.phred);
         continue;
       }
 
@@ -695,8 +748,8 @@ batchmap
 
       if (there_is_only_one_best_hit) {
       a.qual = uN0.N0 > QUICK_DUPLICATES ?
-        quality_low(strlen(seq), longest_mem, uN0) :
-        quality(a, seq, idx, uN0);
+        quality_low(rlen, longest_mem, uN0) :
+        quality(a, read.seq, idx, uN0);
       }
       else {
         a.qual = 1-1./alnstack->pos;
@@ -707,10 +760,8 @@ batchmap
       // Output in sam format.
       int bits = pos.strand ? 0 : 16;
       fprintf(stdout, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-         seqname, bits, pos.rname, pos.pos, (int) (-10*log10(a.qual)),
-         rlen-1, seq, phred, a.score);
-
-      free(seqname);
+         read.name, bits, pos.rname, pos.pos, (int) (-10*log10(a.qual)),
+         rlen-1, read.seq, read.phred, a.score);
 
       // Free alignments
       for(size_t i = 0; i < alnstack->pos; i++)
@@ -719,9 +770,14 @@ batchmap
 
    }
 
+   if (success < 0) {
+     fprintf(stderr, "error while reading input file\n");
+     exit(EXIT_FAILURE);
+   }
+
+   free(buff);
    fclose(inputf);
    free_index_chr(idx.chr);
-   free(seq);
    sesame_clean();
 
 }
