@@ -1,12 +1,3 @@
-## Please use commit 0ae9d185dd44d8e4136bdb28d5479b1de754c7e8 ##
-
-We accidentally broke `mmp` while trying to update it. We are
-really sorry for the inconvenience. We are fixing everything
-as fast as we can. In the meantime, we recommend you use commit
-0ae9d185dd44d8e4136bdb28d5479b1de754c7e8, as this is the last
-one that seems to work.
-
-
 ## MEM Mapper Prototype: mapping short reads, faithfully ##
 ---
 ## Contents: ##
