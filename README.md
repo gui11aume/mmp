@@ -47,10 +47,23 @@ compile:
 
  > make
 
-A binary file `mmp` will be created. We made sure that `mmp` does not
-depend on external libraries. It is written in C and all the code you
-need is in the repository, so this should work on every variant of
-Linux.
+A binary file `mmp` will be created. Right now we have a bit of an issue with
+the library `divsufsort`, which does not link properly. We are working on it,
+but in the meantime, you have to use the following workaround. First create
+a symbolic link as follows
+
+ > ln -s lib/libdivsufsort.so lib/libdivsufsort.so.3
+ 
+After this, you will have to update the environment variable `LD_LIBRARY_PATH`
+to be able to use `mmp`. You need to do the following every time you open a
+new terminal
+
+  > export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:path/to/mmp/lib
+  
+Do not forget to replace `path/to/mmp` by the correct value. If the current
+directory is the `mmp` repository, you can do
+
+  > export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/lib
 
 
 III. Running `mmp`
