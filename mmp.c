@@ -678,8 +678,8 @@ batchmap
    read_t read = {{0}}; read.phred[0] = '*'; // No quality.
    int success = 0;
 
-   size_t sz = 64;
-   char * buff = malloc(64);
+   size_t sz = 256;
+   char * buff = malloc(sz);
    exit_error(buff == NULL);
 
    while ((success = parse_read(inputf, format, &read, &buff, &sz))) {
@@ -760,6 +760,14 @@ batchmap
       fprintf(stdout, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
          read.name, bits, pos.rname, pos.pos, (int) (-10*log10(a.qual)),
          rlen, read.seq, read.phred, a.score);
+
+      // Free seeds
+		for (size_t i = 0; i < seeds->pos; i++) {
+			seed_t * s = (seed_t *) seeds->ptr[i];
+			free(s->sa);
+			free(s);
+		}
+		free(seeds);
 
       // Free alignments
       for(size_t i = 0; i < alnstack->pos; i++)

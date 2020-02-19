@@ -1048,12 +1048,12 @@ mapread
       best->aln[i].refseq = decompress_genome(idx.dna, best->aln[i].refpos, slen + best->aln[i].score);
    
    // Free seeds
-   for (size_t i = 0; i < seeds->pos; i++) {
-      seed_t * s = (seed_t *) seeds->ptr[i];
-      free(s->sa);
-      free(s);
-   }
-   free(seeds);
+//   for (size_t i = 0; i < seeds->pos; i++) {
+//      seed_t * s = (seed_t *) seeds->ptr[i];
+//      free(s->sa);
+//      free(s);
+//   }
+//   free(seeds);
    
    return best;
 
