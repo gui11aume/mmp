@@ -722,10 +722,17 @@ batchmap
 
       // Did not find anything.
       if (alnstack->pos == 0) {
-        free(alnstack);
-        // Output in sam format.
         fprintf(stdout, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
             read.name, read.seq, read.phred);
+        free(alnstack);
+        // Output in sam format.
+        // Free seeds
+        for (size_t i = 0; i < seeds->pos; i++) {
+          seed_t * s = (seed_t *) seeds->ptr[i];
+          free(s->sa);
+          free(s);
+        }
+        free(seeds);
         continue;
       }
 
