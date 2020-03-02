@@ -116,11 +116,6 @@ build_index
    char buff[256];
    size_t gsize;
 
-   // TODO: Convert in parameter
-   // ** chunksize must be less than 2^32-1-tail
-   size_t sa_chunksize = 50000000; // 10^9 uint32 (4GB)
-   size_t sa_chunktail = 10000;
-   
    // Read and normalize genome
    sprintf(buff, "%s.chr", fname);
    fprintf(stderr, "reading genome... ");
@@ -147,13 +142,13 @@ build_index
    fprintf(stderr, "done.\n");
 
    // Create SA chunks
-   fprintf(stderr, "computing suffix array blocks...\n");
-   int nchunks = compute_sa_chunks(genome, fname, sa_chunksize, sa_chunktail);
+   fprintf(stderr, "computing suffix array...\n");
+   compute_sa(genome, fname);
    fprintf(stderr, "\rdone       \n");
 
    // Merge SA and create CSA, OCC, BWT
-   fprintf(stderr, "merging suffix array...\n");
-   merge_sa_chunks(genome, fname, sa_chunksize, nchunks);
+   fprintf(stderr, "computing fm index...\n");
+   compute_fmindex(fname, genome);
    fprintf(stderr, "\rdone.     \n");
    free(genome);
    
