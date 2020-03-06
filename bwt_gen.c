@@ -876,7 +876,6 @@ static void BWTIncBuildRelativeRank(bgint_t* __restrict sortedRank, bgint_t* __r
 	bgint_t i, c;
 	bgint_t s, r;
 	bgint_t lastRank, lastIndex;
-	bgint_t oldInverseSa0RelativeRank = 0;
 	bgint_t freq;
 
 	lastIndex = numItem;
@@ -887,7 +886,6 @@ static void BWTIncBuildRelativeRank(bgint_t* __restrict sortedRank, bgint_t* __r
 	s = seq[numItem];
 	relativeRank[s] = numItem;
 	if (lastRank == oldInverseSa0) {
-		oldInverseSa0RelativeRank = numItem;
 		oldInverseSa0++;	// so that this segment of code is not run again
 		lastRank++;			// so that oldInverseSa0 become a sorted group with 1 item
 	}
@@ -920,7 +918,6 @@ static void BWTIncBuildRelativeRank(bgint_t* __restrict sortedRank, bgint_t* __r
 			lastRank = r;
 			relativeRank[s] = i;
 			if (r == oldInverseSa0) {
-				oldInverseSa0RelativeRank = i;
 				oldInverseSa0++;	// so that this segment of code is not run again
 				lastRank++;			// so that oldInverseSa0 become a sorted group with 1 item
 			}
@@ -950,14 +947,11 @@ static void BWTIncBuildBwt(unsigned int* insertBwt, const bgint_t *relativeRank,
 static void BWTIncMergeBwt(const bgint_t *sortedRank, const unsigned int* oldBwt, const unsigned int *insertBwt,
 						   unsigned int* __restrict mergedBwt, const bgint_t numOldBwt, const bgint_t numInsertBwt)
 {
-	unsigned int bitsInWordMinusBitPerChar;
 	bgint_t leftShift, rightShift;
 	bgint_t o;
 	bgint_t oIndex, iIndex, mIndex;
 	bgint_t mWord, mChar, oWord, oChar;
 	bgint_t numInsert;
-
-	bitsInWordMinusBitPerChar = BITS_IN_WORD - BIT_PER_CHAR;
 
 	oIndex = 0;
 	iIndex = 0;
@@ -1447,7 +1441,7 @@ BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxB
 	BWTInc *bwtInc;
 
 	packedFile = (FILE*)fopen(inputFileName, "rb");
-	
+
 	if (packedFile == NULL) {
 		fprintf(stderr, "BWTIncConstructFromPacked() : Cannot open %s : %s\n",
 				inputFileName, strerror(errno));
@@ -1455,10 +1449,10 @@ BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxB
 	}
 
 	if (fseek(packedFile, -1, SEEK_END) != 0) {
-		fprintf(stderr, "BWTIncConstructFromPacked() : Can't seek on %s : %s\n",
+		fprintf(stderr, "BWTIncConstructFromPacked(1) : Can't seek on %s : %s\n",
 				inputFileName, strerror(errno));
 		exit(1);
-	}	
+	}
 	packedFileLen = ftell(packedFile);
 	if (packedFileLen == -1) {
 		fprintf(stderr, "BWTIncConstructFromPacked() : Can't ftell on %s : %s\n",
@@ -1486,7 +1480,7 @@ BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxB
 	textSizeInByte = textToLoad / CHAR_PER_BYTE;	// excluded the odd byte
 
 	if (fseek(packedFile, -((long)textSizeInByte + 2), SEEK_CUR) != 0) {
-		fprintf(stderr, "BWTIncConstructFromPacked() : Can't seek on %s : %s\n",
+		fprintf(stderr, "BWTIncConstructFromPacked(2) : Can't seek on %s : %s\n",
 				inputFileName, strerror(errno));
 		exit(1);
 	}
@@ -1498,7 +1492,7 @@ BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxB
 		exit(1);
 	}
 	if (fseek(packedFile, -((long)textSizeInByte + 1), SEEK_CUR) != 0) {
-		fprintf(stderr, "BWTIncConstructFromPacked() : Can't seek on %s : %s\n",
+		fprintf(stderr, "BWTIncConstructFromPacked(3) : Can't seek on %s : %s\n",
 				inputFileName, strerror(errno));
 		exit(1);
 	}
@@ -1515,7 +1509,7 @@ BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxB
 		}
 		textSizeInByte = textToLoad / CHAR_PER_BYTE;
 		if (fseek(packedFile, -((long)textSizeInByte), SEEK_CUR) != 0) {
-			fprintf(stderr, "BWTIncConstructFromPacked() : Can't seek on %s : %s\n",
+			fprintf(stderr, "BWTIncConstructFromPacked(4) : Can't seek on %s : %s\n",
 					inputFileName, strerror(errno));
 			exit(1);
 		}
@@ -1527,7 +1521,7 @@ BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxB
 			exit(1);
 		}
 		if (fseek(packedFile, -((long)textSizeInByte), SEEK_CUR) != 0) {
-			fprintf(stderr, "BWTIncConstructFromPacked() : Can't seek on %s : %s\n",
+			fprintf(stderr, "BWTIncConstructFromPacked(5) : Can't seek on %s : %s\n",
 					inputFileName, strerror(errno));
 			exit(1);
 		}
@@ -1579,11 +1573,22 @@ void BWTSaveBwtCodeAndOcc(const BWT *bwt, const char *bwtFileName, const char *o
 
 	bwtLength = BWTFileSizeInWord(bwt->textLength);
 
-	if (fwrite(&bwt->inverseSa0, sizeof(bgint_t), 1, bwtFile) != 1
-		|| fwrite(bwt->cumulativeFreq + 1,
-				  sizeof(bgint_t), ALPHABET_SIZE, bwtFile) != ALPHABET_SIZE
-		|| fwrite(bwt->bwtCode,
-				  sizeof(unsigned int), bwtLength, bwtFile) != bwtLength) {
+	bgint_t nslots = bwt->textLength/4 + (bwt->textLength%4 > 0);
+	
+	// Correct endianness (bwt->bwtCode is stored in 32bit int, we need it to be uint8_t consistent).
+	uint8_t * ptr = (uint8_t *)bwt->bwtCode;
+	for (size_t i = 0; i < nslots; i+=4) {
+	   uint8_t tmp[2] = {ptr[i], ptr[i+1]};
+	   ptr[i] = ptr[i+3];
+	   ptr[i+1] = ptr[i+2];
+	   ptr[i+2] = tmp[1];
+	   ptr[i+3] = tmp[0];
+	}
+	
+	if (fwrite(&bwt->textLength, sizeof(bgint_t), 1, bwtFile) != 1
+	    || fwrite(&bwt->inverseSa0, sizeof(bgint_t), 1, bwtFile) != 1
+	    || fwrite(&nslots, sizeof(bgint_t), 1, bwtFile) != 1
+	    || fwrite((uint8_t *)bwt->bwtCode, 1, bwtLength*sizeof(unsigned int), bwtFile) != bwtLength*sizeof(unsigned int)) { // Force big endian
 		fprintf(stderr, "BWTSaveBwtCodeAndOcc(): Error writing to %s : %s\n",
 				bwtFileName, strerror(errno));
 		exit(1);
@@ -1595,7 +1600,7 @@ void BWTSaveBwtCodeAndOcc(const BWT *bwt, const char *bwtFileName, const char *o
 	}
 }
 
-void bwt_bwtgen2(const char *fn_pac, const char *fn_bwt, int block_size)
+void bwt_bwtgen2(const char *fn_pac, const char *fn_bwt, int block_size) // use block_size 10M
 {
 	BWTInc *bwtInc;
 	bwtInc = BWTIncConstructFromPacked(fn_pac, block_size, block_size);
