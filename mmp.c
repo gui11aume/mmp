@@ -15,49 +15,6 @@
 
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 
-
-// ------- Machine-specific code ------- //
-// The 'mmap()' option 'MAP_POPULATE' is available
-// only on Linux and from kern version 2.6.23.
-#if __linux__
-  #include <linux/version.h>
-  #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
-    #define _MAP_POPULATE_AVAILABLE
-  #endif
-#endif
-
-#ifdef _MAP_POPULATE_AVAILABLE
-  #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
-#else
-  #define MMAP_FLAGS MAP_PRIVATE
-#endif
-
-// ------- Machine-specific code ------- //
-// The 'mmap()' option 'MAP_POPULATE' is available
-// only on Linux and from kern version 2.6.23.
-#if __linux__
-  #include <linux/version.h>
-  #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
-    #define _MAP_POPULATE_AVAILABLE
-  #endif
-#endif
-
-#ifdef _MAP_POPULATE_AVAILABLE
-  #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
-#else
-  #define MMAP_FLAGS MAP_PRIVATE
-#endif
-
-
-// Error-handling macro.
-#define exit_cannot_open(x) \
-   do { fprintf(stderr, "cannot open file '%s' %s:%d:%s()\n", (x), \
-         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); } while(0)
-
-#define exit_error(x) \
-   do { if (x) { fprintf(stderr, "error: %s %s:%d:%s()\n", #x, \
-         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
-
 typedef struct uN0_t uN0_t;
 typedef struct seedp_t seedp_t;
 typedef struct read_t read_t;
@@ -103,7 +60,6 @@ build_index
    const char * fname
 )
 {
-
    // Open fasta file.
    FILE * fasta = fopen(fname, "r");
    if (fasta == NULL) exit_cannot_open(fname);
@@ -113,69 +69,55 @@ build_index
    ssize_t ws;
    size_t sz;
 
-   char buff[256];
-   size_t gsize;
+   char * fn = malloc(strlen(fname)+10);
+   char * fn2 = malloc(strlen(fname)+10);
 
-   // Read and normalize genome
-   sprintf(buff, "%s.chr", fname);
-   fprintf(stderr, "reading genome... ");
-   char * genome = normalize_genome(fasta, buff, &gsize);
+   // Read and pack FASTA
+   fprintf(stderr, "packing sequence... ");
+   pack_fasta(fname);
    fprintf(stderr, "done.\n");
-
-   fclose(fasta);
-
-   fprintf(stderr, "compressing nucleotides... ");
-   char * dna = compress_genome(genome, gsize);
-
-   // Write the compressed genome
-   sprintf(buff, "%s.dna", fname);
-   int fdna = creat(buff, 0644);
-   if (fdna < 0) exit_cannot_open(buff);
    
-   ws = 0;
-   sz = gsize/4+1;
-   data = (char *) dna;
-   while (ws < sz) ws += write(fdna, data + ws, sz - ws);
-   close(fdna);
-
-   free(dna);
+   // Compute bwt using bwt_gen
+   fprintf(stderr, "computing bwt...\n");
+   sprintf(fn, "%s.dna", fname);
+   sprintf(fn2, "%s.bwt", fname);
+   size_t bwt_blocksize = 10000000;
+   bwt_bwtgen2(fn, fn2, bwt_blocksize);
    fprintf(stderr, "done.\n");
 
-   // Create SA chunks
-   fprintf(stderr, "computing suffix array...\n");
-   compute_sa(genome, fname);
-   fprintf(stderr, "\rdone       \n");
-
-   // Merge SA and create CSA, OCC, BWT
-   fprintf(stderr, "computing fm index...\n");
-   compute_fmindex(fname, genome);
+   // Compute Occ table from BWT
+   fprintf(stderr, "computing occ from bwt...\n");
+   bwt2occ(fname);
    fprintf(stderr, "\rdone.     \n");
-   free(genome);
+
+   // Compute sampled SA using backward search
+   fprintf(stderr, "computing sampled SA with bw search...\n");
+   bwt2sa(fname);
+   fprintf(stderr, "\rdone.     \n");
    
    // Load OCC
-   sprintf(buff, "%s.occ", fname);
-   int focc = open(buff, O_RDONLY);
-   if (focc < 0) exit_cannot_open(buff);
+   sprintf(fn, "%s.occ", fname);
+   int focc = open(fn, O_RDONLY);
+   if (focc < 0) exit_cannot_open(fn);
 
    ssize_t mmsz = lseek(focc, 0, SEEK_END);
    occ_t *occ = (occ_t *) mmap(NULL, mmsz, PROT_READ, MMAP_FLAGS, focc, 0);
    exit_error(occ == NULL);
    close(focc);
-   
 
    // Create LUT
    fprintf(stderr, "filling lookup table... ");
    lut_t * lut = malloc(sizeof(lut_t));
-   fill_lut(lut, occ, (range_t) {.bot=1, .top=gsize}, 0, 0);
+   fill_lut(lut, occ, (range_t) {.bot=1, .top=occ->txtlen}, 0, 0);
    fprintf(stderr, "done.\n");
 
    // Unmap occ
    munmap(lut, mmsz);
 
    // Write the lookup table
-   sprintf(buff, "%s.lut", fname);
-   int flut = creat(buff, 0644);
-   if (flut < 0) exit_cannot_open(buff);
+   sprintf(fn, "%s.lut", fname);
+   int flut = creat(fn, 0644);
+   if (flut < 0) exit_cannot_open(fn);
 
    ws = 0;
    sz = sizeof(lut_t);

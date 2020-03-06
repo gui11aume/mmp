@@ -15,6 +15,50 @@
 #ifndef _bwt_HEADER_
 #define _bwt_HEADER_
 
+
+// ------- Machine-specific code ------- //
+// The 'mmap()' option 'MAP_POPULATE' is available
+// only on Linux and from kern version 2.6.23.
+#if __linux__
+  #include <linux/version.h>
+  #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
+    #define _MAP_POPULATE_AVAILABLE
+  #endif
+#endif
+
+#ifdef _MAP_POPULATE_AVAILABLE
+  #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
+#else
+  #define MMAP_FLAGS MAP_PRIVATE
+#endif
+
+// ------- Machine-specific code ------- //
+// The 'mmap()' option 'MAP_POPULATE' is available
+// only on Linux and from kern version 2.6.23.
+#if __linux__
+  #include <linux/version.h>
+  #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
+    #define _MAP_POPULATE_AVAILABLE
+  #endif
+#endif
+
+#ifdef _MAP_POPULATE_AVAILABLE
+  #define MMAP_FLAGS (MAP_PRIVATE | MAP_POPULATE)
+#else
+  #define MMAP_FLAGS MAP_PRIVATE
+#endif
+
+
+// Error-handling macro.
+#define exit_error(x) \
+   do { if (x) { fprintf(stderr, "error: %s %s:%d:%s()\n", #x, \
+         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
+
+#define exit_cannot_open(x) \
+   do { fprintf(stderr, "cannot open file '%s' %s:%d:%s()\n", (x), \
+         __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); } while(0)
+
+
 // Index parameters
 #define OCC_INTERVAL_SIZE 16
 #define CSA_SAMP_RATIO 32
@@ -113,10 +157,10 @@ struct csa_t {
 
 // The Burrow-Wheeler transform.
 struct bwt_t {
-   size_t   txtlen;      // 'strlen(txt) + 1'.
-   size_t   zero;        // Position of '$'.
-   size_t   nslots;      // Number of slots.
-   uint8_t  slots[0];    // 2-bit characters.
+   int64_t   txtlen;      // 'strlen(txt) + 1'.
+   int64_t   zero;        // Position of '$'.
+   int64_t   nslots;      // Number of slots.
+   uint8_t   slots[0];     // 2-bit characters.
 };
 
 // Chromosome list.
@@ -162,14 +206,15 @@ struct pos_t {
 
 // VISIBLE FUNCTION DECLARATIONS //
 
+void         pack_fasta(const char*);
 csa_t      * compress_sa(int64_t *);
+void         bwt2occ(const char*);
+void         bwt2sa(const char*);
 void         compute_sa(const char *, const char *);
 void         compute_fmindex(const char *, const char *);
 bwt_t      * create_bwt(const char *, const int64_t *);
 occ_t      * create_occ(const bwt_t *, const int);
 void         fill_lut(lut_t *, const occ_t *, range_t, size_t, size_t);
-char       * normalize_genome(FILE *, char *, size_t *);
-char       * compress_genome(char *, size_t);
 char       * decompress_genome(char *, size_t, size_t);
 chr_t      * index_load_chr(const char *);
 void         free_index_chr(chr_t *);
@@ -184,6 +229,9 @@ size_t     * query_csa_range(csa_t *, bwt_t *, occ_t *, range_t);
 wstack_t   * stack_new    (size_t max);
 u64stack_t * u64stack_new (size_t max);
 void         push         (void * ptr, wstack_t ** stackp);
+
+// Header for bwt_gen.c
+void         bwt_bwtgen2(const char *fn_pac, const char *fn_bwt, int block_size);
 
 
 #endif

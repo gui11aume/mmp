@@ -2,7 +2,6 @@
 #include <assert.h>
 #include <unistd.h>
 #include <stdio.h>
-#include "divsufsort_private.h"
 #include "bwt.h"
 
 
@@ -93,117 +92,25 @@ const char CAPS[256] = {
 
 // SECTION 3.1 INDEXING FUNCTIONS //
 
-void
-compute_sa
+void bwt2occ
 (
- const char * txt,
  const char * basename
- )
-{
-   const size_t txtlen = strlen(txt) + 1;
-   // Allocate memory for SA
-   saidx64_t * array  = calloc(txtlen, sizeof(saidx64_t));
-   exit_on_memory_error(array);
-   // Compute SA
-   divsufsort((const unsigned char *) txt, array, txtlen);
-
-   // Store in disk
-   char * fname = malloc(strlen(basename)+100);
-   exit_on_memory_error(fname);
-   sprintf(fname,"%s.sa.tmp", basename);
-   int sa_fd = creat(fname, 0644);
-
-   // Write to file descriptor
-   size_t bw = 0, bt = txtlen*sizeof(saidx64_t);
-   char * sa_bytes = (char *)array;
-   while(bw < bt) bw += write(sa_fd, sa_bytes + bw, bt-bw);
-
-   close(sa_fd);
-   free(array);
-   free(fname);
-   return;
-}
-
-int
-fill_buffer
-(
- u64stack_t * buffer,
- int fd
- )
-{
-   ssize_t bytes, wr = 0, wt = buffer->max * sizeof(uint64_t);
-   while (wr<wt) {
-      bytes = read(fd, ((char *)buffer->val)+wr, wt-wr);
-      if (bytes < 1) {
-	 buffer->max = wr/sizeof(uint32_t);
-	 break;
-      }
-      wr += bytes;
-   }
-   buffer->pos = 0;
-   return buffer->max == 0;
-}
-
-int
-compare
-(
- const char  * str_a,
- const char  * str_b
 )
 {
-   return strcmp(str_a, str_b);
-}
+   char * fn = malloc(strlen(basename)+10);
 
-void
-compute_fmindex
-(
- const char * basename,
- const char * txt
- )
-{
-   const size_t txtlen = strlen(txt) + 1; // Do not forget $.
-   ssize_t BUFSIZE = min(txtlen*8, 125000000); // Max 1 GB
-   size_t zero = 0;
-   ssize_t bw = 0, bt = 0;
+   // Load bwt
+   sprintf(fn, "%s.bwt", basename);
+   int fbwt = open(fn, O_RDONLY);
+   if (fbwt < 0) exit_cannot_open(fn);
 
-   // Allocate buffers
-   u64stack_t * sa_buf = u64stack_new(BUFSIZE);
-
-   // Open file descriptors
-   char * fname = malloc(strlen(basename)+100);
-   exit_on_memory_error(fname);
-   sprintf(fname, "%s.sa.tmp", basename);
-   int sa_fd = open(fname, O_RDONLY);
-
-   // Open CSA stream
-   size_t nbits = 0;
-   while (txtlen > ((uint64_t) 1 << nbits)) nbits++;
-   size_t nnumb = (txtlen + (CSA_SAMP_RATIO-1)) / CSA_SAMP_RATIO;
-   size_t nint64 = (nbits * nnumb + (64-1)) / 64;
-   uint64_t bmask = ((uint64_t) 0xFFFFFFFFFFFFFFFF) >> (64-nbits);
-   
-   sprintf(fname,"%s.sa", basename);
-   int csa_fd = creat(fname, 0644);
-
-   // struct header
-   size_t csa_ratio = CSA_SAMP_RATIO;
-   bw = write(csa_fd, &nbits, sizeof(size_t));
-   bw = write(csa_fd, &bmask, sizeof(uint64_t));
-   bw = write(csa_fd, &nint64, sizeof(size_t));
-   bw = write(csa_fd, &csa_ratio, sizeof(size_t));
-
-   // Open BWT stream
-   const size_t nslots = (txtlen + (4-1)) / 4;
-
-   sprintf(fname,"%s.bwt", basename);
-   int bwt_fd = creat(fname, 0644);
-
-   // struct header 
-   bw = write(bwt_fd, &txtlen, sizeof(size_t));
-   bw = write(bwt_fd, &txtlen, sizeof(size_t)); // bwt_zero
-   bw = write(bwt_fd, &nslots, sizeof(size_t));
+   size_t mmsz = lseek(fbwt, 0, SEEK_END);
+   bwt_t *bwt = (bwt_t *) mmap(NULL, mmsz, PROT_READ, MMAP_FLAGS, fbwt, 0);
+   exit_error(bwt == NULL);
+   close(fbwt);
 
    // Open OCC stream
+   size_t   txtlen = bwt->txtlen + 1; // Include wildcard, not in bwt
    uint64_t word_size = 64;
    uint64_t mark_bits = OCC_INTERVAL_SIZE * word_size;
    const uint64_t nintv = (txtlen + mark_bits - 1) / mark_bits;
@@ -211,75 +118,38 @@ compute_fmindex
    const uint64_t nmark = nintv + 1;
    const size_t occ_size = nword+nmark;
 
-   sprintf(fname, "%s.occ", basename);
-   int occ_fd = creat(fname, 0644);
+   sprintf(fn, "%s.occ", basename);
+   int occ_fd = creat(fn, 0644);
+
+   uint64_t C[SIGMA+1] = {0};
    
    // Struct header
+   ssize_t bw, bt;
    uint64_t occ_mark_intv = OCC_INTERVAL_SIZE;
    bw = write(occ_fd, &txtlen, sizeof(size_t));
    bw = write(occ_fd, &occ_size, sizeof(uint64_t));
    bw = write(occ_fd, &occ_mark_intv, sizeof(uint64_t));
    bw = write(occ_fd, &word_size, sizeof(uint64_t));
    bw = write(occ_fd, &mark_bits, sizeof(uint64_t));
-   for (int i = 0; i <= SIGMA; i++) //C
-      bw = write(occ_fd, &zero, sizeof(uint64_t));
+   bw = write(occ_fd, C, (SIGMA+1)*sizeof(uint64_t));
 
-   // General loop variables
-   // CSA loop variables
-   uint8_t csa_lastbit = 0;
-   uint64_t csa_word = 0;
-   // BWT loop variables
-   int64_t bwt_zero;
-   size_t bwt_bufsize = 4096;
-   uint8_t * bwt_bytes = malloc(bwt_bufsize);
-   // OCC loop variables
+   // Loop variables
    int intv_words = SIGMA*(1+OCC_INTERVAL_SIZE);
    uint64_t * occ_intv = calloc(intv_words, sizeof(uint64_t));
    exit_on_memory_error(occ_intv);
    uint64_t occ_abs[SIGMA] = {0};
 
-   size_t i = 0;
-   sa_buf->pos = sa_buf->max; // Force buffer filling.
-   for (; i < txtlen; i++) {
-      if (sa_buf->pos == sa_buf->max)
-	 fill_buffer(sa_buf, sa_fd);
-      uint64_t saidx = sa_buf->val[sa_buf->pos++];
-
-      // CSA (1:csa_samp_rate compression)
-      if (i%CSA_SAMP_RATIO == 0) {
-	 // Shift first bits of saidx
-	 csa_word |= saidx << csa_lastbit;
-	 // Update bit offset
-	 csa_lastbit += nbits;
-      
-	 if (csa_lastbit >= 64) {
-	    // Shift bit position
-	    csa_lastbit = csa_lastbit - 64;
-	    // Write word
-	    bw = write(csa_fd, &csa_word, sizeof(uint64_t));
-	    // Start new word
-	    csa_word = 0;
-	    // Write last bits of saidx
-	    csa_word |= saidx >> (nbits - csa_lastbit);
-	 }
-      }
-      // BWT & OCC
-      uint8_t c = 0;
-      if (saidx != 0) {
-	 c = ENCODE[(uint8_t) txt[saidx-1]];
+   // Read bwt
+   size_t i = 0, j = 0;
+   for (; i < txtlen; i++, j++) {
+      // Fill occ word
+      if (i != bwt->zero) {
+	 uint8_t c = (bwt->slots[j/4] >> (6-2*(j%4))) & 0x03;
 	 occ_abs[c]++;
 	 occ_intv[SIGMA + c*OCC_INTERVAL_SIZE + (i%mark_bits)/word_size] |= ((uint64_t)1) << (word_size - 1 - (i % word_size));
       } else {
-	 bwt_zero = i;
-      }
-      
-      bwt_bytes[(i/4)%bwt_bufsize] |= c << 2*(i % 4);
-
-      // Write BWT word
-      if ((i+1) % (4*bwt_bufsize) == 0) {
-	 bw = 0; bt = bwt_bufsize;
-	 while(bw < bt) bw += write(bwt_fd, bwt_bytes + bw, bt-bw);
-	 memset(bwt_bytes, 0, bwt_bufsize);
+	 // Wildcard is not present in bwt, leave a blank space in occ table
+	 j--;
       }
 
       // Write OCC word
@@ -293,36 +163,22 @@ compute_fmindex
 	 memcpy(occ_intv, occ_abs, SIGMA*sizeof(uint64_t));
       }
 
-      // Verbose
-      if (i % 100000 == 0)
-	 fprintf(stderr, "\r%.2f%%", (100.0*i)/txtlen);
+      // Verbose progress
+      if (i%10000 == 0)
+	 fprintf(stderr, "\r%.2f%%", i*100.0/txtlen);
    }
 
-   // Finish CSA
-   bw = write(csa_fd, &csa_word, sizeof(uint64_t));
-   
-   // Finish BWT
-   if (i % (4*bwt_bufsize) > 0) {
-      bw = 0; bt = (i%(4*bwt_bufsize))/4 + ((i%4) > 0);
-      while(bw<bt) bw += write(bwt_fd, bwt_bytes + bw, bt-bw);
-   }
-   
-   // Seek back in bwt_fd to write zero position
-   lseek(bwt_fd, sizeof(size_t), SEEK_SET);
-   bw = write(bwt_fd, &bwt_zero, sizeof(size_t));
-   
    // Finish OCC
    if (i % mark_bits > 0) {
       // Write full interval
-      ssize_t bw = 0, bt = intv_words*sizeof(uint64_t);
+      bw = 0, bt = intv_words*sizeof(uint64_t);
       while(bw<bt) bw += write(occ_fd, ((char *)occ_intv)+bw, bt-bw);
    }
    // Write last OCC absolute position mark
    bw = 0; bt = SIGMA*sizeof(uint64_t);
    while(bw<bt) bw += write(occ_fd, ((char *)occ_abs)+bw, bt-bw);
-   
+
    // Compute 'C'.
-   uint64_t C[SIGMA+1];
    C[0] = 1;
    for (int i = 1 ; i < SIGMA+1 ; i++)
       C[i] = C[i-1] + occ_abs[i-1];
@@ -331,22 +187,94 @@ compute_fmindex
    lseek(occ_fd, sizeof(size_t) + 4*sizeof(uint64_t), SEEK_SET);
    bw = 0; bt = (SIGMA+1)*sizeof(uint64_t);
    while (bw<bt) bw += write(occ_fd, ((char *)C)+bw, bt-bw);
-   
-   // Close streams
-   close(csa_fd);
-   close(bwt_fd);
+
+   munmap(bwt, mmsz);
    close(occ_fd);
-   close(sa_fd);
-
-   // Remove tmp file
-   sprintf(fname, "%s.sa.tmp", basename);
-   remove(fname);
-
-   // Free memory
-   free(sa_buf);
-   free(bwt_bytes);
-   free(fname);
    free(occ_intv);
+   free(fn);
+}
+
+void
+bwt2sa
+(
+ const char * basename
+)
+{
+   char * fn = malloc(strlen(basename)+10);
+   // Load sequence data
+   sprintf(fn, "%s.dna", basename);
+   int fdna = open(fn, O_RDONLY);
+   if (fdna < 0) exit_cannot_open(fn);
+
+   size_t mmsz_dna = lseek(fdna, 0, SEEK_END);
+   char *dna = (char *) mmap(NULL, mmsz_dna, PROT_READ, MMAP_FLAGS, fdna, 0);
+   exit_error(dna == NULL);
+   close(fdna);
+
+   // Load occ table
+   sprintf(fn, "%s.occ", basename);
+   int focc = open(fn, O_RDONLY);
+   if (focc < 0) exit_cannot_open(fn);
+
+   size_t mmsz_occ = lseek(focc, 0, SEEK_END);
+   occ_t *occ = (occ_t *) mmap(NULL, mmsz_occ, PROT_READ, MMAP_FLAGS, focc, 0);
+   exit_error(occ == NULL);
+   close(focc);
+
+   // Open CSA stream
+   size_t nbits = 0;
+   while (occ->txtlen > ((uint64_t) 1 << nbits)) nbits++;
+   size_t nnumb = (occ->txtlen + (CSA_SAMP_RATIO-1)) / CSA_SAMP_RATIO;
+   size_t nint64 = (nbits * nnumb + (64-1)) / 64;
+   uint64_t bmask = ((uint64_t) 0xFFFFFFFFFFFFFFFF) >> (64-nbits);
+   
+   sprintf(fn,"%s.sa", basename);
+   int csa_fd = creat(fn, 0644);
+
+   // CSA struct header
+   ssize_t bw, bt;
+   size_t csa_ratio = CSA_SAMP_RATIO;
+   bw = write(csa_fd, &nbits, sizeof(size_t));
+   bw = write(csa_fd, &bmask, sizeof(uint64_t));
+   bw = write(csa_fd, &nint64, sizeof(size_t));
+   bw = write(csa_fd, &csa_ratio, sizeof(size_t));
+
+   // CSA buffer
+   uint64_t * csa_buf = calloc(nint64, sizeof(uint64_t));
+
+   // Perform backward search from the end
+   int64_t fm_ptr = 0;
+
+   for (size_t i = occ->txtlen-2; i > 0; i--) {
+      int c = dna[i/4] >> (6-2*(i%4)) & 0x03;
+      fm_ptr = get_rank(occ, c, fm_ptr - 1);
+
+      // CSA (1:csa_samp_rate compression)
+      if (fm_ptr%CSA_SAMP_RATIO == 0) {
+	 uint64_t saidx = i & bmask;
+	 uint64_t word = ((fm_ptr/CSA_SAMP_RATIO)*nbits)/64;
+	 uint64_t bit = ((fm_ptr/CSA_SAMP_RATIO)*nbits)%64;
+
+	 // Write SA value (i) in sampled FM index position
+	 csa_buf[word]   |= saidx << bit;
+	 if (bit + nbits > 64)  // Split word
+	    csa_buf[word+1] |= saidx >> (64-bit);
+      }
+
+      // Verbose progress
+      if (i%10000 == 0)
+	 fprintf(stderr, "\r%.2f%%", 100-i*100.0/occ->txtlen);
+   }
+
+   // Write sampled SA to file
+   bw = 0; bt = nint64*sizeof(int64_t);
+   while(bw < bt) bw += write(csa_fd, ((char *)csa_buf) + bw, bt-bw);
+
+   close(csa_fd);
+   munmap(dna, mmsz_dna);
+   munmap(occ, mmsz_occ);
+   free(csa_buf);
+   free(fn);
 }
 
 
@@ -495,6 +423,7 @@ get_rank
  )
 {
    int64_t pos = (int64_t)pos_unsigned;
+   if (pos == -1) return (size_t)occ_ptr->C[c];
    // Compute interval, word, bit and absolute marker positions.
    int64_t intv_num = pos/occ_ptr->occ_mark_bits;
    int64_t intv_wrd = (pos%occ_ptr->occ_mark_bits)/occ_ptr->occ_word_size;
@@ -608,7 +537,8 @@ query_csa
 	 return (lo_bits | hi_bits) & csa->bmask;
       }
    }
-   uint8_t c = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
+   size_t bwtpos = pos - (pos >= bwt->zero);
+   uint8_t c = bwt->slots[bwtpos/4] >> (6-2*(bwtpos % 4)) & 0b11;
    size_t nextpos = get_rank(occ, c, pos) - 1;
    return query_csa(csa, bwt, occ, nextpos) + 1;
 
@@ -661,7 +591,7 @@ recursive_csa_query
    int    done = 1;
    size_t rlen = range.top - range.bot + 1;
    for (int i = 0; i < rlen; i++) {
-      if (sa_values[i] > bwt->txtlen) {
+      if (sa_values[i] > occ->txtlen) {
 	 done = 0;
 	 break;
       }
@@ -680,10 +610,11 @@ recursive_csa_query
    // For each position in range:
    for (size_t pos = range.bot, i = 0; pos <= range.top; pos++, i++) {
       // 1. Get preceding character from BWT.
-      prev_c[i] = bwt->slots[pos/4] >> 2*(pos % 4) & 0b11;
+      size_t bwtpos = pos - (pos >= bwt->zero);
+      prev_c[i] = (bwt->slots[bwtpos/4] >> (6-2*(bwtpos % 4))) & 0b11;
       c_count[prev_c[i]]++;
       // 2. Mark the nucleotide for extension if SA value is missing.
-      if (sa_values[i] > bwt->txtlen) extend[(int)prev_c[i]] = 1;
+      if (sa_values[i] > occ->txtlen) extend[(int)prev_c[i]] = 1;
    }
 
    // Extend unsampled nucleotides.
@@ -741,7 +672,7 @@ query_csa_range
    exit_on_memory_error(sa_values);
    // Flag all positions as missing
    for (size_t i = 0; i < nloc; i++)
-      sa_values[i] = bwt->txtlen+1;
+      sa_values[i] = occ->txtlen+1;
 
    // Do the recursive search
    recursive_csa_query(csa, bwt, occ, range, sa_values, 0);
@@ -762,7 +693,7 @@ decompress_genome
    exit_on_memory_error(seq);
 
    for (size_t i = 0, p = pos; i < len; i++, p++)
-      seq[i] = ALPHABET[(dna[p/4] >> ((p*2)%8)) & 0b11];
+      seq[i] = ALPHABET[(dna[p/4] >> (6-((p*2)%8))) & 0b11];
 
    seq[len] = 0;
    return seq;
@@ -776,23 +707,33 @@ compress_genome
  )
 {
    // Allocate nucleotides.
-   char * dna = calloc(gsize/4+1, 1);
+   char * dna = calloc(gsize/4+2, 1);
    exit_on_memory_error(dna);
 
    for (size_t i = 0; i < gsize; i++)
-      dna[i/4] |= (ENCODE[(int)genome[i]] & 0b11) << ((i*2)%8);
+      dna[i/4] |= (ENCODE[(int)genome[i]] & 0b11) << (6-((i*2)%8));
+
+   // Store size of last byte (if 0, leave last byte empty and flag size=0)
+   // this is to make it consistent with .pac file in bwa (to construct bwt).
+   dna[gsize/4+1] = (uint8_t)(gsize%4);
 
    return dna;
 }
 
-char *
-normalize_genome
+void
+pack_fasta
 (
- FILE   * inputf,
- char   * chrfile,
- size_t * gsize_ptr
- )
+ const char * basename
+)
 {
+   // Open files
+   FILE * inputf = fopen(basename, "r");
+   if (inputf == NULL) exit_cannot_open(basename);
+   
+   char * fn = malloc(strlen(basename)+10);
+   sprintf(fn, "%s.chr", basename);
+   int fd = open(fn, O_WRONLY | O_CREAT, 0664);
+   if (fd < 0) exit_cannot_open(fn);
 
    // Read variables.
    size_t sz = 64;
@@ -836,7 +777,6 @@ normalize_genome
    }
 
    // Write chromosome names
-   int fd = open(chrfile, O_WRONLY | O_CREAT, 0664);
    ssize_t b;
    b = write(fd, &gsize, sizeof(size_t));
    if (b < 1) {
@@ -866,44 +806,42 @@ normalize_genome
    // the index and the genome must This is not good: we should pass a
    // flag to tell whether capitalization should be performed, or change
    // the logic of this part entirely.
-  
-   // Normalize (use only capital alphabet letters).
-   for (size_t pos = 0; pos < gsize ; pos++) {
-      uint64_t iter = 0;
-      if (NONALPHABET[(uint8_t) genome[pos]]) {
-	 // Replace by cycling over (A,C,G,T).
-	 genome[pos] = ALPHABET[iter++ % 4];
-      }
-      else {
-	 // Use only capital letters (important for
-	 // sorting the suffixes in lexicographic order).
-	 genome[pos] = toupper(genome[pos]);
-      }
+
+   // Allocate packed nucleotides.
+   char * dna = calloc((2*gsize)/4+2, 1);
+   exit_on_memory_error(dna);
+
+   // Pack forward strand
+   ssize_t i = 0;
+   for (; i < gsize ; i++) {
+      uint8_t c = NONALPHABET[(uint8_t) genome[i]] ? 0 : ENCODE[(int)genome[i]];
+      dna[i/4] |= (c & 0b11) << (6-((i*2)%8));
    }
 
-   // Realloc buffer.
-   char * rsz = realloc(genome, 2*gsize + 1);
-   exit_on_memory_error(rsz);
-   genome = rsz;
+   // Pack reverse strand
+   for (ssize_t j = gsize-1; j >= 0; j--, i++) {
+      uint8_t c = NONALPHABET[(uint8_t) genome[j]] ? 0 : ENCODE[(int)genome[j]];
+      dna[i/4] |= ((3-c) & 0b11) << (6-((i*2)%8)); // Reverse complement (3-c)
+   }
 
-   // Reverse complement.
-   size_t div = gsize;
-   for (size_t pos = 0 ; pos < div ; pos++)
-      genome[div + pos] = REVCOMP[(uint8_t) genome[div-pos-1]];
+   // Store size of last byte (if 0, leave last byte empty and flag size=0)
+   // this is to make it consistent with .pac file in bwa (to construct bwt).
+   dna[(2*gsize)/4+1] = (uint8_t)((2*gsize)%4);
 
-   gsize = 2*gsize + 1;
+   // Write the compressed genome
+   sprintf(fn, "%s.dna", basename);
+   int fdna = creat(fn, 0644);
+   if (fdna < 0) exit_cannot_open(fn);
 
-   // Add the terminator.
-   genome[2*div] = '\0';
-
-   // Return genome size.
-   *gsize_ptr = 2*div;
+   size_t bw = 0, bt = (2*gsize)/4+2;
+   while (bw < bt) bw += write(fdna, dna + bw, bt - bw);
+   close(fdna);
 
    // Clean up.
+   free(fn);
+   free(dna);
    free(buffer);
-
-   return genome;
-
+   free(genome);
 }
 
 wstack_t *
