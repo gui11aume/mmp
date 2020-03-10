@@ -40,12 +40,13 @@ II. Compilation and installation
 
 To install `mmp`, open a terminal and clone this git repository:
 
- > git clone https://github.com/gui11aume/mmp
+    git clone https://github.com/gui11aume/mmp
 
-The files should be downloaded in a folder named `mmp`. Use `make` to
-compile:
+The files should be downloaded in a directory named `mmp`. Go to this new
+directory and use `make` to compile:
 
- > make
+    cd mmp
+    make
 
 This will create a binary file `mmp`.
 
@@ -60,7 +61,7 @@ You first have to index a genome file before you can map reads in it. If
 the genome of interest is saved in a file called `genome.fasta`, you
 index it with the following command:
 
-  > ./mmp --index genome.fasta
+    ./mmp --index genome.fasta
   
 This creates a bunch of files that all start with `genome.fasta.`. This
 is the index.
@@ -74,11 +75,11 @@ you must know the approximate error rate of the sequencer. By default,
 If your reads are in a file called `reads.fastq`, you map them with the
 following command:
 
-  > ./mmp genome.fasta reads.fastq
+    ./mmp genome.fasta reads.fastq
 
 This produces a sam file printed on `stdout`. You can change the error
 rate with the option `-e`. For instance, if you know that it is 2%,
 then the command should be:
 
-  > ./mmp -e 0.02 genome.fasta reads.fastq
+    ./mmp -e 0.02 genome.fasta reads.fastq
 
