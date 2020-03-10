@@ -701,8 +701,9 @@ batchmap
       pos_t pos = get_pos(a.refpos, idx.chr);
       // Output in sam format.
       int bits = pos.strand ? 0 : 16;
+      size_t leftpos = pos.strand ? pos.pos : pos.pos - rlen+1;
       fprintf(stdout, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-         read.name, bits, pos.rname, pos.pos, (int) (-10*log10(a.qual)),
+         read.name, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
          rlen, read.seq, read.phred, a.score);
 
       // Free seeds
