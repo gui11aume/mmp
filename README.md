@@ -47,24 +47,7 @@ compile:
 
  > make
 
-A binary file `mmp` will be created. Right now we have a bit of an issue with
-the library `divsufsort`, which does not link properly. We are working on it,
-but in the meantime, you have to use the following workaround. First create
-a symbolic link as follows
-
- > ln -s lib/libdivsufsort.so lib/libdivsufsort.so.3
- 
-After this, you will have to update the environment variable `LD_LIBRARY_PATH`
-to be able to use `mmp`. You need to do the following every time you open a
-new terminal
-
-  > export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:path/to/mmp/lib
-  
-Do not forget to replace `path/to/mmp` by the correct value. If the current
-directory is the `mmp` repository, you can do
-
-  > export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/lib
-
+This will create a binary file `mmp`.
 
 III. Running `mmp`
 --------------------
@@ -79,13 +62,14 @@ index it with the following command:
 
   > ./mmp --index genome.fasta
   
-This creates a bunch of files that all start with `genome.fasta`  
+This creates a bunch of files that all start with `genome.fasta.`. This
+is the index.
       
 ### Mapping:
 
 Once the genome is indexed, you can start mapping reads in it. For this
 you must know the approximate error rate of the sequencer. By default,
-`mmp` assumes that the error rate is 1%.
+`mmp` assumes that it is 1%.
 
 If your reads are in a file called `reads.fastq`, you map them with the
 following command:
