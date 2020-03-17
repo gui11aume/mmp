@@ -47,9 +47,10 @@ struct writerarg_t {
 
 struct batch_t {
    // Data
+   index_t     idx;
+   size_t      lineid;
    wstack_t  * reads;
    char     ** output;
-   index_t     idx;
    // Thread signaling
    int               done;
    int             * act_threads;
@@ -640,7 +641,6 @@ batch_map
    batch->output = output;
 
    index_t idx = batch->idx;
-   size_t counter = 0; // Used for randomizing.
    
    for (size_t i = 0; i < batch->reads->pos; i++) {
 
@@ -678,7 +678,7 @@ batch_map
         longest_mem = filter_longest_mem(seeds);
       }
 
-      alnstack_t * alnstack = mapread(seeds, read->seq, idx, rlen);
+      alnstack_t * alnstack = mapread(seeds, read->seq, idx, rlen, batch->lineid + i);
 
       // Did not find anything.
       if (alnstack->pos == 0) {
@@ -701,7 +701,7 @@ batch_map
       }
 
       // Pick a top alignment at "random".
-      aln_t a = alnstack->aln[counter % alnstack->pos];
+      aln_t a = alnstack->aln[(batch->lineid + i) % alnstack->pos];
 
       int there_is_only_one_best_hit = 1;
       if (alnstack->pos > 1) {
@@ -842,7 +842,7 @@ mt_read
 
    int success = 0;
 
-   size_t sz = 256, line = 1;
+   size_t sz = 256, line = 0;
    char * buff = malloc(sz);
    exit_error(buff == NULL);
 
@@ -884,7 +884,7 @@ mt_read
       }
 
       if (success < 0) {
-	 fprintf(stderr, "error while reading input file (line %ld)\n", line);
+	 fprintf(stderr, "error while reading input file (line %ld)\n", line+1);
 	 exit(EXIT_FAILURE);
       }
 
@@ -897,9 +897,10 @@ mt_read
       }
 
       // Fill batch info
+      batch->idx           = idx;
+      batch->lineid        = line - reads->pos;
       batch->reads         = reads;
       batch->output        = NULL;
-      batch->idx           = idx;
       batch->act_threads   = &act_threads;
       batch->mutex_sesame  = &mutex_sesame;
       batch->mutex_reader  = &mutex_reader;

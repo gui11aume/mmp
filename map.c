@@ -21,8 +21,6 @@ int DEBUG_VERBOSE = 0;
 #define min(x,y) ((x) < (y) ? (x) : (y))
 #define min3(x,y,z) (min(min(x,y),z))
 
-static ssize_t circ_num = 0;
-
 struct seedchain_t {
    size_t    pos;
    size_t    max;
@@ -938,8 +936,9 @@ mapread
  wstack_t      * seeds,
  const char    * seq,
  const index_t   idx,
- const int       max_mismatches
- )
+ const int       max_mismatches,
+ const size_t    circ_num
+)
 {
 
    size_t slen = strlen(seq);
@@ -1035,7 +1034,6 @@ mapread
 	 if (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
 	    break;
       }
-      circ_num++;
    }
 
    // Check if best alignment is 100% unique
