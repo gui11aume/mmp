@@ -51,7 +51,7 @@ struct batch_t {
    char     ** output;
    index_t     idx;
    // Thread signaling
-   size_t            done;
+   int               done;
    int             * act_threads;
    pthread_mutex_t * mutex_sesame;
    pthread_mutex_t * mutex_reader;
@@ -766,7 +766,7 @@ mt_write
    batch_t * batch = warg->first_batch;
 
    while(1) {
-      while (batch->done >= 0) {
+      while (batch && batch->done >= 0) {
 	 // Write all output strings
 	 for (size_t i = 0; i < batch->done; i++) {
 	    fprintf(stdout, "%s", batch->output[i]);
@@ -777,10 +777,11 @@ mt_write
 	 batch_t * next_batch = batch->next_batch;
 	 free(batch->output);
 	 free(batch);
-	 if (!next_batch) break;
 	 batch = next_batch;
       }
-      
+
+      if (!batch) break;
+
       pthread_mutex_lock(warg->mutex);
       pthread_cond_wait(warg->cond, warg->mutex);
       pthread_mutex_unlock(warg->mutex);
