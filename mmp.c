@@ -53,6 +53,7 @@ struct batch_t {
    // Thread signaling
    size_t            done;
    int             * act_threads;
+   pthread_mutex_t * mutex_sesame;
    pthread_mutex_t * mutex_reader;
    pthread_mutex_t * mutex_writer;
    pthread_cond_t  * cond_reader;
@@ -379,10 +380,11 @@ quality_low
 double
 quality
 (
-         aln_t   aln,
-   const char *  seq,  // Read.
-         index_t idx,
-         uN0_t   uN0_read
+         aln_t             aln,
+   const char *            seq,  // Read.
+         index_t           idx,
+         uN0_t             uN0_read,
+         pthread_mutex_t * mutex,
 )
 {
 
@@ -527,7 +529,9 @@ quality
      return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
    }
 
+   pthread_mutex_lock(mutex);
    double poff = auto_mem_seed_offp(slen, u, N0);
+   pthread_mutex_unlock(mutex);
 
    // Weight of the evidence if mapping is correct...
    double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
@@ -696,7 +700,7 @@ batch_map
       if (there_is_only_one_best_hit) {
       a.qual = uN0.N0 > QUICK_DUPLICATES ?
         quality_low(rlen, longest_mem, uN0) :
-        quality(a, read->seq, idx, uN0);
+	 quality(a, read->seq, idx, uN0, batch->mutex_sesame);
       }
       else {
         a.qual = 1-1./alnstack->pos;
@@ -829,7 +833,7 @@ mt_read
    pthread_cond_t  cond_reader  = PTHREAD_COND_INITIALIZER,  cond_writer  = PTHREAD_COND_INITIALIZER;
    
    // Create first batch
-   batch_t * batch = malloc(sizeof(batch_t));
+   batch_t * batch = calloc(1, sizeof(batch_t));
    exit_error(batch == NULL);
 
    // Create writer thread
@@ -856,7 +860,9 @@ mt_read
 	    maxlen = rlen;
 	    // TODO: IMPLEMENT SESAME MUTEX (lookup table and static params)
 	    // (Re)initialize library. (mutex required)
+	    pthread_mutex_lock(&mutex_sesame);
 	    sesame_set_static_params(GAMMA, maxlen, PROB);
+	    pthread_mutex_unlock(&mutex_sesame);
 	 }
 
 	 line++;
@@ -872,7 +878,7 @@ mt_read
       // Alloc next batch to get linked list pointer
       batch_t * next_batch = NULL;
       if (success) {
-	 next_batch = malloc(sizeof(batch_t));
+	 next_batch = calloc(1, sizeof(batch_t));
 	 exit_error(next_batch == NULL);
       }
 
@@ -882,6 +888,7 @@ mt_read
       batch->idx           = idx;
       batch->done          = 0;
       batch->act_threads   = &act_threads;
+      batch->mutex_sesame  = &mutex_sesame;
       batch->mutex_reader  = &mutex_reader;
       batch->mutex_writer  = &mutex_writer;
       batch->cond_reader   = &cond_reader;
@@ -889,6 +896,10 @@ mt_read
       batch->next_batch    = next_batch;
 
       // Create new thread
+      pthread_mutex_lock(&mutex_reader);
+      act_threads++;
+      pthread_mutex_unlock(&mutex_reader);
+      
       pthread_t thread;
       if (pthread_create(&thread, NULL, batch_map, batch)) exit_error(1);
       pthread_detach(thread);
@@ -896,14 +907,10 @@ mt_read
       // Break on last batch
       if (next_batch == NULL) break;
 
-
-      pthread_mutex_lock(&mutex_reader);
-      act_threads++;
-
       // Wait for condition signal (available threads)
+      pthread_mutex_lock(&mutex_reader);
       while (act_threads >= MAXTHREADS)
 	 pthread_cond_wait(&cond_reader, &mutex_reader);
-
       pthread_mutex_unlock(&mutex_reader);
 
       batch = next_batch;
