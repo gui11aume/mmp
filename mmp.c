@@ -29,9 +29,9 @@ struct uN0_t {
 };
 
 struct read_t {
-   char name[256];
-   char seq[256];
-   char phred[256];
+   char * name;
+   char * seq;
+   char * phred;
 };
 
 struct seedp_t {
@@ -574,38 +574,55 @@ print_sam_header
 int
 parse_read
 (
-        FILE   *  inputf,
-   enum fmt_t     format,
-        read_t *  read,
-        char   ** buffaddr,
-        size_t *  sz
+        FILE      * inputf,
+   enum fmt_t       format,
+	wstack_t ** stack
 )
 {
+  size_t n = 0;
   ssize_t len = 0;
-  char * buff = *buffaddr; // Just because c'mon.
+  read_t * read = calloc(1, sizeof(read_t));
   if (format == fasta) {
     // Read 2 lines.
-    len = getline(buffaddr, sz, inputf);
+    //name
+    len = getline(&(read->name), &n, inputf);
     if (len == -1) return 0;
-    strncpy(read->name, buff+1, min(255, strcspn(buff+1, " \t\n")));
-    len = getline(buffaddr, sz, inputf);
+    if (read->name[len-1] == '\n') read->name[len-1] = 0;
+
+    //seq
+    n = 0;
+    len = getline(&(read->seq), &n, inputf);
     if (len == -1) return -1;
-    strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
+    if (read->seq[len-1] == '\n') read->seq[len-1] = 0;
+
+    //no quality
+    read->phred = strdup("*");
+    
+    push(read, stack);
     return 1;
   }
   if (format == fastq) {
-    // Read 4 lines.
-    len = getline(buffaddr, sz, inputf);
+    // name
+    len = getline(&(read->name), &n, inputf);
     if (len == -1) return 0;
-    strncpy(read->name, buff+1, min(255, strcspn(buff+1, " \t\n")));
-    len = getline(buffaddr, sz, inputf);
+    strtok(read->name, " \t\n");
+
+    // seq
+    n = 0;
+    len = getline(&(read->seq), &n, inputf);
     if (len == -1) return -1;
-    strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
-    len = getline(buffaddr, sz, inputf);
+    strtok(read->seq, "\n");
+    
+    // + (skip line)
+    if(fscanf(inputf, "%*[^\n]\n") < 0) return -1;
+    
+    // phred
+    n = 0;
+    len = getline(&(read->phred), &n, inputf);
     if (len == -1) return -1;
-    len = getline(buffaddr, sz, inputf);
-    if (len == -1) return -1;
-    strncpy(read->phred, buff, min(255, strcspn(buff, " \t\n")));
+    strtok(read->phred, "\n");
+
+    push(read, stack);
     return 1;
   }
   return -1;
@@ -643,11 +660,11 @@ batch_map
         free(seeds);
         // Output in sam format.
 	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-			       read->name, read->seq, read->phred);
+			       read->name+1, read->seq, read->phred);
 	output[i] = malloc(olen+1);
 	exit_error(output[i] == NULL);
         sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-		read->name, read->seq, read->phred);
+		read->name+1, read->seq, read->phred);
         continue;
       }
 
@@ -666,7 +683,7 @@ batch_map
       // Did not find anything.
       if (alnstack->pos == 0) {
 	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-			    read->name, read->seq, read->phred);
+			    read->name+1, read->seq, read->phred);
 	output[i] = malloc(olen+1);
 	exit_error(output[i] == NULL);
         sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
@@ -684,7 +701,7 @@ batch_map
       }
 
       // Pick a top alignment at "random".
-      aln_t a = alnstack->aln[counter++ % alnstack->pos];
+      aln_t a = alnstack->aln[counter % alnstack->pos];
 
       int there_is_only_one_best_hit = 1;
       if (alnstack->pos > 1) {
@@ -713,13 +730,13 @@ batch_map
       int bits = pos.strand ? 0 : 16;
       size_t leftpos = pos.strand ? pos.pos : pos.pos - rlen+1;
       int olen = snprintf(NULL, 0, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-			  read->name, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+			  read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
 			  rlen, read->seq, read->phred, a.score);
 
       output[i] = malloc(olen+1);
       exit_error(output[i] == NULL);
       sprintf(output[i], "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-         read->name, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+         read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
          rlen, read->seq, read->phred, a.score);
 
       // Free seeds
@@ -734,8 +751,14 @@ batch_map
       for(size_t i = 0; i < alnstack->pos; i++)
          free(alnstack->aln[i].refseq);
       free(alnstack);
+
+      // Free read
+      free(read->name);
+      free(read->seq);
+      free(read->phred);
+      free(read);
    }
-   
+
    // Decrease active threads
    pthread_mutex_lock(batch->mutex_reader);
    *(batch->act_threads) = *(batch->act_threads) - 1;
@@ -745,11 +768,10 @@ batch_map
    // Signal writer monitor
    pthread_mutex_lock(batch->mutex_writer);
    batch->done = batch->reads->pos;
+   free(batch->reads);
    pthread_cond_signal(batch->cond_writer);
    pthread_mutex_unlock(batch->mutex_writer);
 
-   // Free read stack and signal reader and writer threads.
-   free(batch->reads);
 
    return NULL;
 }
@@ -818,7 +840,6 @@ mt_read
 
    print_sam_header(idx);
 
-   read_t read = {{0}}; read.phred[0] = '*'; // No quality.
    int success = 0;
 
    size_t sz = 256, line = 1;
@@ -846,23 +867,12 @@ mt_read
 
    while (1) {
       wstack_t * reads = stack_new(BATCHSIZE);
-      
       // Read input batch
-      while ((success = parse_read(inputf, format, &read, &buff, &sz))) {
-	 // Create new read
-	 read_t * r = malloc(sizeof(read_t));
-	 exit_error(r == NULL);
-	 memcpy(r, &read, sizeof(read_t));
-	 
-	 // Push read to thread buffer
-	 push(r, &reads);
-	 
-	 // Set sesame static params
-	 size_t rlen = strlen(read.seq);
+      while ((success = parse_read(inputf, format, &reads))) {
+	 // Set sesame static params	    
+	 size_t rlen = strlen(((read_t *)reads->ptr[reads->pos-1])->seq);
 	 if (rlen > maxlen) {
 	    maxlen = rlen;
-	    // TODO: IMPLEMENT SESAME MUTEX (lookup table and static params)
-	    // (Re)initialize library. (mutex required)
 	    pthread_mutex_lock(&mutex_sesame);
 	    sesame_set_static_params(GAMMA, maxlen, PROB);
 	    pthread_mutex_unlock(&mutex_sesame);
