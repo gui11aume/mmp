@@ -879,6 +879,7 @@ mt_read
       // Fill batch info
       batch->reads         = reads;
       batch->output        = NULL;
+      batch->idx           = idx;
       batch->done          = 0;
       batch->act_threads   = &act_threads;
       batch->mutex_reader  = &mutex_reader;
