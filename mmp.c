@@ -384,7 +384,7 @@ quality
    const char *            seq,  // Read.
          index_t           idx,
          uN0_t             uN0_read,
-         pthread_mutex_t * mutex,
+         pthread_mutex_t * mutex
 )
 {
 
