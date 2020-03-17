@@ -620,6 +620,7 @@ batch_map
    batch_t * batch  = (batch_t *)arg;
    char   ** output = malloc(batch->reads->pos * sizeof(char *));
    exit_error(output == NULL);
+   batch->output = output;
 
    index_t idx = batch->idx;
    size_t counter = 0; // Used for randomizing.
@@ -737,7 +738,7 @@ batch_map
    
    // Decrease active threads
    pthread_mutex_lock(batch->mutex_reader);
-   batch->act_threads--;
+   *(batch->act_threads) = *(batch->act_threads) - 1;
    pthread_cond_signal(batch->cond_reader);
    pthread_mutex_unlock(batch->mutex_reader);
 
@@ -765,7 +766,7 @@ mt_write
    batch_t * batch = warg->first_batch;
 
    while(1) {
-      while (batch->done) {
+      while (batch->done >= 0) {
 	 // Write all output strings
 	 for (size_t i = 0; i < batch->done; i++) {
 	    fprintf(stdout, "%s", batch->output[i]);
@@ -835,6 +836,7 @@ mt_read
    // Create first batch
    batch_t * batch = calloc(1, sizeof(batch_t));
    exit_error(batch == NULL);
+   batch->done = -1;
 
    // Create writer thread
    writerarg_t warg = (writerarg_t){batch, &mutex_writer, &cond_writer};
@@ -879,6 +881,7 @@ mt_read
       batch_t * next_batch = NULL;
       if (success) {
 	 next_batch = calloc(1, sizeof(batch_t));
+	 next_batch->done = -1;
 	 exit_error(next_batch == NULL);
       }
 
@@ -886,7 +889,6 @@ mt_read
       batch->reads         = reads;
       batch->output        = NULL;
       batch->idx           = idx;
-      batch->done          = 0;
       batch->act_threads   = &act_threads;
       batch->mutex_sesame  = &mutex_sesame;
       batch->mutex_reader  = &mutex_reader;
