@@ -69,10 +69,11 @@ static int    MAXTHREADS = MAXTHREADSDEFAULT;
 char* HELP_MSG =
   "Usage:\n"
   "   index:  mmp  --index  index.fasta\n"
-  "   map:    mmp [-e 0.01] index.fasta reads.fasta\n"
+  "   map:    mmp [-e 0.01 | -t 1] index.fasta reads.fasta\n"
   "\n"
   "Options:\n"
   "  -e: sequencing error rate (default: 0.01)\n"
+  "  -t: number of threads (default: 1)\n"
   "\n";
    
 
@@ -963,7 +964,7 @@ main
 		  fprintf(stderr, "Sequencing error must be in (0,1).\n");
 		  exit(EXIT_FAILURE);
 	       }
-	    } else if (argv[i][1] == 'p') {
+	    } else if (argv[i][1] == 't') {
 	       MAXTHREADS = atoi(argv[++i]);
 	       if (MAXTHREADS <= 0) {
 		  fprintf(stderr, "Max threads must be greater than 0.\n");
