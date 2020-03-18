@@ -660,7 +660,7 @@ batch_map
         free(seeds);
         // Output in sam format.
 	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-			       read->name+1, read->seq, read->phred);
+			    read->name+1, read->seq, read->phred);
 	output[i] = malloc(olen+1);
 	exit_error(output[i] == NULL);
         sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
@@ -687,7 +687,7 @@ batch_map
 	output[i] = malloc(olen+1);
 	exit_error(output[i] == NULL);
         sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-            read->name, read->seq, read->phred);
+		read->name+1, read->seq, read->phred);
         free(alnstack);
         // Output in sam format.
         // Free seeds
