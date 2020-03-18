@@ -452,12 +452,12 @@ void
 extend_L1L2
 (
  const char   * seq,
+ const int      len,
  const index_t  idx,
  seed_t       * L1,
  seed_t       * L2
 )
 {
-   int len = strlen(seq);
 
    // Preallocate ranges
    range_t range = {0};
@@ -503,8 +503,9 @@ extend_L1L2
 
    // Check L1 result
    if (L1->end - L1->beg + 1 == len) {
-      L2->beg = L1->beg;
-      L2->end = L1->end;
+      L2->beg   = L1->beg;
+      L2->end   = L1->end;
+      L2->range = L1->range;
       return;
    }
 

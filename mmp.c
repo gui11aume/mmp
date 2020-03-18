@@ -246,9 +246,9 @@ estimate_N0
    if (L1.beg == 0) {
       // No need to go reverse: the answer will be the same.
       // We switch gear and use Newton-Raphson iterations.
-      long int m = L1.range.top - L1.range.bot - 1;
+      long int m = L1.range.top - L1.range.bot + 1;
       double p = pow(1-mu, fwd);
-      double N = N1;
+      double N = N1 > m ? N1 : m;
       for (int j = 0 ; j < 8 ; j++) {
          double fN = digamma(N+1)-digamma(N-m+1) + log(1.-p);
          double dfN = trigamma(N+1)-trigamma(N-m+1);
@@ -507,7 +507,7 @@ quality
 
    // Estimate N0 on the hit.
    seed_t L1, L2;
-   extend_L1L2(aln.refseq, idx, &L1, &L2);
+   extend_L1L2(aln.refseq, slen, idx, &L1, &L2);
    uN0_t uN0_hit = estimate_N0(L1, L2, idx, u);
    if (uN0_hit.N0 * uN0_hit.p0 > N0 * p0) {
       N0 = uN0_hit.N0;
@@ -649,7 +649,7 @@ batch_map
       
       // Compute L1, L2 and MEMs.
       seed_t L1, L2;
-      extend_L1L2(read->seq, idx, &L1, &L2);
+      extend_L1L2(read->seq, rlen, idx, &L1, &L2);
 
       // Compute seeds.
       wstack_t * seeds = mem_seeds(read->seq, idx, GAMMA);
