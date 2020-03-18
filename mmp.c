@@ -557,7 +557,9 @@ parse_read
     // Read 2 lines.
     len = getline(buffaddr, sz, inputf);
     if (len == -1) return 0;
-    strncpy(read->name, buff+1, min(255, strcspn(buff+1, " \t\n")));
+    int nlen = min(255, strcspn(buff+1, " \t\n"));
+    strncpy(read->name, buff+1, nlen);
+    read->name[nlen] = '\0';
     len = getline(buffaddr, sz, inputf);
     if (len == -1) return -1;
     strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
@@ -567,7 +569,9 @@ parse_read
     // Read 4 lines.
     len = getline(buffaddr, sz, inputf);
     if (len == -1) return 0;
-    strncpy(read->name, buff+1, min(255, strcspn(buff+1, " \t\n")));
+    int nlen = min(255, strcspn(buff+1, " \t\n"));
+    strncpy(read->name, buff+1, nlen);
+    read->name[nlen] = '\0';
     len = getline(buffaddr, sz, inputf);
     if (len == -1) return -1;
     strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
