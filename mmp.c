@@ -2,7 +2,7 @@
 #define _GNU_SOURCE
 
 #include <math.h>
-
+#include <pthread.h>
 
 #include "bwt.h"
 #include "map.h"
@@ -12,12 +12,15 @@
 #define PROBDEFAULT 0.01
 #define SKIPQUALDEFAULT 10
 #define QUICK_DUPLICATES 20
+#define MAXTHREADSDEFAULT 1
 
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 
 typedef struct uN0_t uN0_t;
 typedef struct seedp_t seedp_t;
 typedef struct read_t read_t;
+typedef struct writerarg_t writerarg_t;
+typedef struct batch_t batch_t;
 
 struct uN0_t {
    double u;
@@ -26,9 +29,9 @@ struct uN0_t {
 };
 
 struct read_t {
-   char name[256];
-   char seq[256];
-   char phred[256];
+   char * name;
+   char * seq;
+   char * phred;
 };
 
 struct seedp_t {
@@ -36,18 +39,43 @@ struct seedp_t {
    double nul;
 };
 
+struct writerarg_t {
+   batch_t * first_batch;
+   pthread_mutex_t * mutex;
+   pthread_cond_t  * cond;
+};
+
+struct batch_t {
+   // Data
+   index_t     idx;
+   size_t      lineid;
+   wstack_t  * reads;
+   char     ** output;
+   // Thread signaling
+   int               done;
+   int             * act_threads;
+   pthread_mutex_t * mutex_sesame;
+   pthread_mutex_t * mutex_reader;
+   pthread_mutex_t * mutex_writer;
+   pthread_cond_t  * cond_reader;
+   pthread_cond_t  * cond_writer;
+   batch_t         * next_batch;
+};
+
 enum fmt_t {unset = 0, fasta = 1, fastq = 2};
 
 static double PROB = PROBDEFAULT;
 static double SKIPQUAL = SKIPQUALDEFAULT;
+static int    MAXTHREADS = MAXTHREADSDEFAULT;
 
 char* HELP_MSG =
   "Usage:\n"
   "   index:  mmp  --index  index.fasta\n"
-  "   map:    mmp [-e 0.01] index.fasta reads.fasta\n"
+  "   map:    mmp [-e 0.01 | -t 1] index.fasta reads.fasta\n"
   "\n"
   "Options:\n"
   "  -e: sequencing error rate (default: 0.01)\n"
+  "  -t: number of threads (default: 1)\n"
   "\n";
    
 
@@ -218,9 +246,9 @@ estimate_N0
    if (L1.beg == 0) {
       // No need to go reverse: the answer will be the same.
       // We switch gear and use Newton-Raphson iterations.
-      long int m = L1.range.top - L1.range.bot - 1;
+      long int m = L1.range.top - L1.range.bot + 1;
       double p = pow(1-mu, fwd);
-      double N = N1;
+      double N = N1 > m ? N1 : m;
       for (int j = 0 ; j < 8 ; j++) {
          double fN = digamma(N+1)-digamma(N-m+1) + log(1.-p);
          double dfN = trigamma(N+1)-trigamma(N-m+1);
@@ -353,10 +381,11 @@ quality_low
 double
 quality
 (
-         aln_t   aln,
-   const char *  seq,  // Read.
-         index_t idx,
-         uN0_t   uN0_read
+         aln_t             aln,
+   const char *            seq,  // Read.
+         index_t           idx,
+         uN0_t             uN0_read,
+         pthread_mutex_t * mutex
 )
 {
 
@@ -478,7 +507,7 @@ quality
 
    // Estimate N0 on the hit.
    seed_t L1, L2;
-   extend_L1L2(aln.refseq, idx, &L1, &L2);
+   extend_L1L2(aln.refseq, slen, idx, &L1, &L2);
    uN0_t uN0_hit = estimate_N0(L1, L2, idx, u);
    if (uN0_hit.N0 * uN0_hit.p0 > N0 * p0) {
       N0 = uN0_hit.N0;
@@ -501,7 +530,9 @@ quality
      return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
    }
 
+   pthread_mutex_lock(mutex);
    double poff = auto_mem_seed_offp(slen, u, N0);
+   pthread_mutex_unlock(mutex);
 
    // Weight of the evidence if mapping is correct...
    double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
@@ -544,108 +575,96 @@ print_sam_header
 int
 parse_read
 (
-        FILE   *  inputf,
-   enum fmt_t     format,
-        read_t *  read,
-        char   ** buffaddr,
-        size_t *  sz
+        FILE      * inputf,
+   enum fmt_t       format,
+	wstack_t ** stack
 )
 {
+  size_t n = 0;
   ssize_t len = 0;
-  char * buff = *buffaddr; // Just because c'mon.
+  read_t * read = calloc(1, sizeof(read_t));
   if (format == fasta) {
     // Read 2 lines.
-    len = getline(buffaddr, sz, inputf);
+    //name
+    len = getline(&(read->name), &n, inputf);
     if (len == -1) return 0;
-    int nlen = min(255, strcspn(buff+1, " \t\n"));
-    strncpy(read->name, buff+1, nlen);
-    read->name[nlen] = '\0';
-    len = getline(buffaddr, sz, inputf);
+    if (read->name[len-1] == '\n') read->name[len-1] = 0;
+
+    //seq
+    n = 0;
+    len = getline(&(read->seq), &n, inputf);
     if (len == -1) return -1;
-    strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
+    if (read->seq[len-1] == '\n') read->seq[len-1] = 0;
+
+    //no quality
+    read->phred = strdup("*");
+    
+    push(read, stack);
     return 1;
   }
   if (format == fastq) {
-    // Read 4 lines.
-    len = getline(buffaddr, sz, inputf);
+    // name
+    len = getline(&(read->name), &n, inputf);
     if (len == -1) return 0;
-    int nlen = min(255, strcspn(buff+1, " \t\n"));
-    strncpy(read->name, buff+1, nlen);
-    read->name[nlen] = '\0';
-    len = getline(buffaddr, sz, inputf);
+    strtok(read->name, " \t\n");
+
+    // seq
+    n = 0;
+    len = getline(&(read->seq), &n, inputf);
     if (len == -1) return -1;
-    strncpy(read->seq, buff, min(255, strcspn(buff, " \t\n")));
-    len = getline(buffaddr, sz, inputf);
+    strtok(read->seq, "\n");
+    
+    // + (skip line)
+    if(fscanf(inputf, "%*[^\n]\n") < 0) return -1;
+    
+    // phred
+    n = 0;
+    len = getline(&(read->phred), &n, inputf);
     if (len == -1) return -1;
-    len = getline(buffaddr, sz, inputf);
-    if (len == -1) return -1;
-    strncpy(read->phred, buff, min(255, strcspn(buff, " \t\n")));
+    strtok(read->phred, "\n");
+
+    push(read, stack);
     return 1;
   }
   return -1;
 }
 
-
-void
-batchmap
+void *
+batch_map
 (
-   const char * indexfname,
-   const char * readsfname
+ void * arg
 )
 {
+   batch_t * batch  = (batch_t *)arg;
+   char   ** output = malloc(batch->reads->pos * sizeof(char *));
+   exit_error(output == NULL);
+   batch->output = output;
 
-   fprintf(stderr, "loading index... ");
-   // Load index files.
-   index_t idx = load_index(indexfname);
+   index_t idx = batch->idx;
+   
+   for (size_t i = 0; i < batch->reads->pos; i++) {
 
-   fprintf(stderr, "done.\n");
-   FILE * inputf = fopen(readsfname, "r");
-   if (inputf == NULL) exit_cannot_open(readsfname);
-
-   size_t counter = 0; // Used for randomizing.
-   size_t maxlen = 0; // Max 'k' value for seeding probabilities.
-
-   // Set the input type.
-   enum fmt_t format = unset;
-
-   // Look at the first character.
-   char first = getc(inputf);
-   if (first == '>') format = fasta;
-   if (first == '@') format = fastq;
-   ungetc(first, inputf);
-
-   print_sam_header(idx);
-
-   read_t read = {{0}}; read.phred[0] = '*'; // No quality.
-   int success = 0;
-
-   size_t sz = 256;
-   char * buff = malloc(sz);
-   exit_error(buff == NULL);
-
-   while ((success = parse_read(inputf, format, &read, &buff, &sz))) {
-     
-      size_t rlen = strlen(read.seq);
-      if (rlen > maxlen) {
-         maxlen = rlen;
-         // (Re)initialize library.
-         sesame_set_static_params(GAMMA, maxlen, PROB);
-      }
-
+      read_t * read = (read_t *)batch->reads->ptr[i];
+      size_t rlen = strlen(read->seq);
+      
       // Compute L1, L2 and MEMs.
       seed_t L1, L2;
-      extend_L1L2(read.seq, idx, &L1, &L2);
+      extend_L1L2(read->seq, rlen, idx, &L1, &L2);
 
       // Compute seeds.
-      wstack_t * seeds = mem_seeds(read.seq, idx, GAMMA);
+      wstack_t * seeds = mem_seeds(read->seq, idx, GAMMA);
 
       // Return if no seeds were found
       if (seeds->pos == 0) {
         // Did not find anything.
         free(seeds);
         // Output in sam format.
-        fprintf(stdout, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-            read.name, read.seq, read.phred);
+	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+			    read->name+1, read->seq, read->phred);
+	output[i] = malloc(olen+1);
+	exit_error(output[i] == NULL);
+        sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+		read->name+1, read->seq, read->phred);
         continue;
       }
 
@@ -659,12 +678,16 @@ batchmap
         longest_mem = filter_longest_mem(seeds);
       }
 
-      alnstack_t * alnstack = mapread(seeds, read.seq, idx, rlen);
+      alnstack_t * alnstack = mapread(seeds, read->seq, idx, rlen, batch->lineid + i);
 
       // Did not find anything.
       if (alnstack->pos == 0) {
-        fprintf(stdout, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-            read.name, read.seq, read.phred);
+	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+			    read->name+1, read->seq, read->phred);
+	output[i] = malloc(olen+1);
+	exit_error(output[i] == NULL);
+        sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+		read->name+1, read->seq, read->phred);
         free(alnstack);
         // Output in sam format.
         // Free seeds
@@ -678,7 +701,7 @@ batchmap
       }
 
       // Pick a top alignment at "random".
-      aln_t a = alnstack->aln[counter++ % alnstack->pos];
+      aln_t a = alnstack->aln[(batch->lineid + i) % alnstack->pos];
 
       int there_is_only_one_best_hit = 1;
       if (alnstack->pos > 1) {
@@ -695,7 +718,7 @@ batchmap
       if (there_is_only_one_best_hit) {
       a.qual = uN0.N0 > QUICK_DUPLICATES ?
         quality_low(rlen, longest_mem, uN0) :
-        quality(a, read.seq, idx, uN0);
+	 quality(a, read->seq, idx, uN0, batch->mutex_sesame);
       }
       else {
         a.qual = 1-1./alnstack->pos;
@@ -706,35 +729,215 @@ batchmap
       // Output in sam format.
       int bits = pos.strand ? 0 : 16;
       size_t leftpos = pos.strand ? pos.pos : pos.pos - rlen+1;
-      fprintf(stdout, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-         read.name, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
-         rlen, read.seq, read.phred, a.score);
+      int olen = snprintf(NULL, 0, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
+			  read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+			  rlen, read->seq, read->phred, a.score);
+
+      output[i] = malloc(olen+1);
+      exit_error(output[i] == NULL);
+      sprintf(output[i], "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
+         read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+         rlen, read->seq, read->phred, a.score);
 
       // Free seeds
-		for (size_t i = 0; i < seeds->pos; i++) {
-			seed_t * s = (seed_t *) seeds->ptr[i];
-			free(s->sa);
-			free(s);
-		}
-		free(seeds);
+      for (size_t i = 0; i < seeds->pos; i++) {
+	 seed_t * s = (seed_t *) seeds->ptr[i];
+	 free(s->sa);
+	 free(s);
+      }
+      free(seeds);
 
       // Free alignments
       for(size_t i = 0; i < alnstack->pos; i++)
          free(alnstack->aln[i].refseq);
       free(alnstack);
 
+      // Free read
+      free(read->name);
+      free(read->seq);
+      free(read->phred);
+      free(read);
    }
 
-   if (success < 0) {
-     fprintf(stderr, "error while reading input file\n");
-     exit(EXIT_FAILURE);
+   // Decrease active threads
+   pthread_mutex_lock(batch->mutex_reader);
+   *(batch->act_threads) = *(batch->act_threads) - 1;
+   pthread_cond_signal(batch->cond_reader);
+   pthread_mutex_unlock(batch->mutex_reader);
+
+   // Signal writer monitor
+   pthread_mutex_lock(batch->mutex_writer);
+   batch->done = batch->reads->pos;
+   free(batch->reads);
+   pthread_cond_signal(batch->cond_writer);
+   pthread_mutex_unlock(batch->mutex_writer);
+
+
+   return NULL;
+}
+
+
+void *
+mt_write
+(
+ void * arg
+)
+{
+   writerarg_t * warg = (writerarg_t *)arg;
+   
+   batch_t * batch = warg->first_batch;
+
+   while(1) {
+      while (batch && batch->done >= 0) {
+	 // Write all output strings
+	 for (size_t i = 0; i < batch->done; i++) {
+	    fprintf(stdout, "%s", batch->output[i]);
+	    free(batch->output[i]);
+	 }
+
+	 // Free current batch and follow linked list
+	 batch_t * next_batch = batch->next_batch;
+	 free(batch->output);
+	 free(batch);
+	 batch = next_batch;
+      }
+
+      if (!batch) break;
+
+      pthread_mutex_lock(warg->mutex);
+      pthread_cond_wait(warg->cond, warg->mutex);
+      pthread_mutex_unlock(warg->mutex);
    }
 
+   return NULL;
+}
+
+void
+mt_read
+(
+   const char * indexfname,
+   const char * readsfname
+)
+{
+   size_t maxlen = 0; // Max 'k' value for seeding probabilities.
+   
+   fprintf(stderr, "loading index... ");
+   // Load index files.
+   index_t idx = load_index(indexfname);
+
+   fprintf(stderr, "done.\n");
+   FILE * inputf = fopen(readsfname, "r");
+   if (inputf == NULL) exit_cannot_open(readsfname);
+
+   // Set the input type.
+   enum fmt_t format = unset;
+
+   // Look at the first character.
+   char first = getc(inputf);
+   if (first == '>') format = fasta;
+   if (first == '@') format = fastq;
+   ungetc(first, inputf);
+
+   print_sam_header(idx);
+
+   int success = 0;
+
+   size_t sz = 256, line = 0;
+   char * buff = malloc(sz);
+   exit_error(buff == NULL);
+
+   // Multithreading variables
+   int BATCHSIZE = 10000;
+   int act_threads = 0;
+   
+   // Create mutex and monitors
+   pthread_mutex_t mutex_sesame = PTHREAD_MUTEX_INITIALIZER;
+   pthread_mutex_t mutex_reader = PTHREAD_MUTEX_INITIALIZER, mutex_writer = PTHREAD_MUTEX_INITIALIZER;
+   pthread_cond_t  cond_reader  = PTHREAD_COND_INITIALIZER,  cond_writer  = PTHREAD_COND_INITIALIZER;
+   
+   // Create first batch
+   batch_t * batch = calloc(1, sizeof(batch_t));
+   exit_error(batch == NULL);
+   batch->done = -1;
+
+   // Create writer thread
+   writerarg_t warg = (writerarg_t){batch, &mutex_writer, &cond_writer};
+   pthread_t writer_thread;
+   pthread_create(&writer_thread, NULL, mt_write, &warg);
+
+   while (1) {
+      wstack_t * reads = stack_new(BATCHSIZE);
+      // Read input batch
+      while ((success = parse_read(inputf, format, &reads))) {
+	 // Set sesame static params	    
+	 size_t rlen = strlen(((read_t *)reads->ptr[reads->pos-1])->seq);
+	 if (rlen > maxlen) {
+	    maxlen = rlen;
+	    pthread_mutex_lock(&mutex_sesame);
+	    sesame_set_static_params(GAMMA, maxlen, PROB);
+	    pthread_mutex_unlock(&mutex_sesame);
+	 }
+
+	 line++;
+	 if (reads->pos == reads->max)
+	    break;
+      }
+
+      if (success < 0) {
+	 fprintf(stderr, "error while reading input file (line %ld)\n", line+1);
+	 exit(EXIT_FAILURE);
+      }
+
+      // Alloc next batch to get linked list pointer
+      batch_t * next_batch = NULL;
+      if (success) {
+	 next_batch = calloc(1, sizeof(batch_t));
+	 next_batch->done = -1;
+	 exit_error(next_batch == NULL);
+      }
+
+      // Fill batch info
+      batch->idx           = idx;
+      batch->lineid        = line - reads->pos;
+      batch->reads         = reads;
+      batch->output        = NULL;
+      batch->act_threads   = &act_threads;
+      batch->mutex_sesame  = &mutex_sesame;
+      batch->mutex_reader  = &mutex_reader;
+      batch->mutex_writer  = &mutex_writer;
+      batch->cond_reader   = &cond_reader;
+      batch->cond_writer   = &cond_writer;
+      batch->next_batch    = next_batch;
+
+      // Create new thread
+      pthread_mutex_lock(&mutex_reader);
+      act_threads++;
+      pthread_mutex_unlock(&mutex_reader);
+      
+      pthread_t thread;
+      if (pthread_create(&thread, NULL, batch_map, batch)) exit_error(1);
+      pthread_detach(thread);
+
+      // Break on last batch
+      if (next_batch == NULL) break;
+
+      // Wait for condition signal (available threads)
+      pthread_mutex_lock(&mutex_reader);
+      while (act_threads >= MAXTHREADS)
+	 pthread_cond_wait(&cond_reader, &mutex_reader);
+      pthread_mutex_unlock(&mutex_reader);
+
+      batch = next_batch;
+   }
+
+   // Wait for writer.
+   pthread_join(writer_thread, NULL);
+
+   // Free stuff
    free(buff);
    fclose(inputf);
    free_index_chr(idx.chr);
    sesame_clean();
-
 }
 
 
@@ -783,6 +986,12 @@ main
 		  fprintf(stderr, "Sequencing error must be in (0,1).\n");
 		  exit(EXIT_FAILURE);
 	       }
+	    } else if (argv[i][1] == 't') {
+	       MAXTHREADS = atoi(argv[++i]);
+	       if (MAXTHREADS <= 0) {
+		  fprintf(stderr, "Max threads must be greater than 0.\n");
+		  exit(EXIT_FAILURE);
+	       }
 	    }
 	 } else {
 	    if (!index_path) index_path = argv[i];
@@ -801,7 +1010,7 @@ main
          exit(EXIT_FAILURE);
       }
       
-      batchmap(index_path, reads_path);
+      mt_read(index_path, reads_path);
    }
 }
 
