@@ -229,6 +229,7 @@ size_t     * query_csa_range(csa_t *, bwt_t *, occ_t *, range_t);
 wstack_t   * stack_new    (size_t max);
 u64stack_t * u64stack_new (size_t max);
 void         push         (void * ptr, wstack_t ** stackp);
+FILE       * fzopen       (const char * fname, const char * mode);
 
 // Header for bwt_gen.c
 void         bwt_bwtgen2(const char *fn_pac, const char *fn_bwt, int block_size);
