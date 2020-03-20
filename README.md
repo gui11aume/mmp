@@ -19,8 +19,6 @@ Below are the main things to consider before using `mmp`:
     2. The whole read is aligned, there is no trimming.
     3. There is no way to change the sensitivity.
 
-For now, `mmp` is single core, but we'll fix that soon.
-
 Otherwise, `mmp` is pretty good. The most important feature is that it
 is approximately faithful, so you should be able to trust the mapping
 quality. You will notice that some reads have a mapping quality over 150.
@@ -76,6 +74,12 @@ If your reads are in a file called `reads.fastq`, you map them with the
 following command:
 
     ./mmp genome.fasta reads.fastq
+    
+If you want to use more than one core to speed up the mapping, you can
+use the option `-t`. For instance, if you want to use 4 cores, you would
+use the following command:
+
+    ./mmp -t 4 genome.fasta reads.fastq
 
 This produces a sam file printed on `stdout`. You can change the error
 rate with the option `-e`. For instance, if you know that it is 2%,
