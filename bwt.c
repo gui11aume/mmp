@@ -732,7 +732,7 @@ pack_fasta
    
    char * fn = malloc(strlen(basename)+10);
    sprintf(fn, "%s.chr", basename);
-   int fd = open(fn, O_WRONLY | O_CREAT, 0664);
+   int fd = creat(fn, 0644);
    if (fd < 0) exit_cannot_open(fn);
 
    // Read variables.
