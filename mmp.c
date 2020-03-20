@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #include "bwt.h"
 #include "map.h"
@@ -82,6 +83,7 @@ char* HELP_MSG =
 double digamma(double);
 double trigamma(double);
 
+
 void
 build_index
 (
@@ -89,7 +91,7 @@ build_index
 )
 {
    // Open fasta file.
-   FILE * fasta = fopen(fname, "r");
+   FILE * fasta = fzopen(fname, "r");
    if (fasta == NULL) exit_cannot_open(fname);
 
    // Aux variables for file writing.
@@ -826,7 +828,8 @@ mt_read
    index_t idx = load_index(indexfname);
 
    fprintf(stderr, "done.\n");
-   FILE * inputf = fopen(readsfname, "r");
+
+   FILE * inputf = fzopen(readsfname, "r");
    if (inputf == NULL) exit_cannot_open(readsfname);
 
    // Set the input type.
@@ -837,7 +840,6 @@ mt_read
    if (first == '>') format = fasta;
    if (first == '@') format = fastq;
    ungetc(first, inputf);
-
    print_sam_header(idx);
 
    int success = 0;

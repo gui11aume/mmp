@@ -727,7 +727,7 @@ pack_fasta
 )
 {
    // Open files
-   FILE * inputf = fopen(basename, "r");
+   FILE * inputf = fzopen(basename, "r");
    if (inputf == NULL) exit_cannot_open(basename);
    
    char * fn = malloc(strlen(basename)+10);
@@ -894,4 +894,55 @@ u64stack_new
    stack->max = max;
    stack->pos = 0;
    return stack;
+}
+
+FILE *
+fzopen
+(
+ const char * fname,
+ const char * mode
+)
+{
+   /*
+    * Uses zcat pipe to decompress gzip files
+    */
+
+   FILE * inputf = fopen(fname, "r");
+   uint8_t b0 = getc(inputf);
+   uint8_t b1 = getc(inputf);
+   exit_error(inputf == NULL);
+   
+   // Open file
+   if ((b0 == 0x1f) && (b1 == 0x8b)) {
+      fclose(inputf);
+      // Open pipe for communication
+      int pfd[2];
+      int err = pipe(pfd);
+      exit_error(err < 0);
+   
+      // Fork process
+      int pid = fork();
+      exit_error(pid < 0);
+      if (pid) {
+	 // parent
+	 close(pfd[1]);
+	 return fdopen(pfd[0], mode);
+      } else {
+	 // child
+	 // dup pipe to stdout
+	 close(pfd[0]);
+	 close(1);
+	 int newfd = dup(pfd[1]);
+	 exit_error(newfd != 1);
+	 close(pfd[1]);
+	 // execv zcat
+	 err = execlp("zcat","zcat",fname,NULL);
+	 exit_error(err < 0);
+	 return 0;
+      }
+   } else {
+      ungetc(b1, inputf);
+      ungetc(b0, inputf);
+      return inputf;
+   }
 }
