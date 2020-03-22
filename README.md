@@ -87,3 +87,6 @@ then the command should be:
 
     ./mmp -e 0.02 genome.fasta reads.fastq
 
+mmp is also compatible with gzipped input files (requires `zcat` in your `$PATH`):
+    
+    ./mmp -e 0.02 genome.fasta reads.fastq.gz
