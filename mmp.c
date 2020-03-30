@@ -986,6 +986,9 @@ mt_read
 	 last_worker = -1;
       }
 
+      // Assign line id for output consistency
+      batch[w]->lineid = line - batch[w]->reads->pos;
+
       // Signal worker
       pthread_mutex_lock(&mutex);
       batch[w]->status = map;
