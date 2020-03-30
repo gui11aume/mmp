@@ -41,25 +41,29 @@ struct seedp_t {
 };
 
 struct writerarg_t {
-   batch_t * first_batch;
+   batch_t         * first_batch;
    pthread_mutex_t * mutex;
-   pthread_cond_t  * cond;
+   pthread_cond_t  * cond_writer;
+   pthread_cond_t  * cond_reader;
 };
+
+enum status_t {idle = 0, map = 1, output = 2, die = 3};
 
 struct batch_t {
    // Data
-   index_t     idx;
-   size_t      lineid;
-   wstack_t  * reads;
-   char     ** output;
+   index_t           idx;
+   size_t            lineid;
+   wstack_t        * reads;
+   wstack_t        * output;
    // Thread signaling
-   int               done;
+   enum status_t     status;
    int             * act_threads;
+   pthread_mutex_t * mutex;
    pthread_mutex_t * mutex_sesame;
-   pthread_mutex_t * mutex_reader;
-   pthread_mutex_t * mutex_writer;
    pthread_cond_t  * cond_reader;
    pthread_cond_t  * cond_writer;
+   pthread_cond_t  * cond_reads;
+   pthread_cond_t  * cond_threads;
    batch_t         * next_batch;
 };
 
@@ -638,143 +642,164 @@ batch_map
 )
 {
    batch_t * batch  = (batch_t *)arg;
-   char   ** output = malloc(batch->reads->pos * sizeof(char *));
-   exit_error(output == NULL);
-   batch->output = output;
-
    index_t idx = batch->idx;
+   int * act_threads = batch->act_threads;
+   char * outstr;
    
-   for (size_t i = 0; i < batch->reads->pos; i++) {
+   while (1) {
+      // Two blocks:
+      // 1. No reads available yet
+      // 2. No threads available
 
-      read_t * read = (read_t *)batch->reads->ptr[i];
-      size_t rlen = strlen(read->seq);
+      // 1. Reads available
+      pthread_mutex_lock(batch->mutex);
+      while (batch->status != map) {
+	 if (batch->status != die) {
+	    pthread_cond_wait(batch->cond_reads, batch->mutex);
+	 } else {
+	    pthread_mutex_unlock(batch->mutex);
+	    return NULL;
+	 }
+      }
+
+      // 2. Wait for available thread slot
+      while (*act_threads >= MAXTHREADS)
+	 pthread_cond_wait(batch->cond_threads, batch->mutex);
+
+      // Take thread slot
+      *act_threads = *act_threads + 1;
+      pthread_mutex_unlock(batch->mutex);
       
-      // Compute L1, L2 and MEMs.
-      seed_t L1, L2;
-      extend_L1L2(read->seq, rlen, idx, &L1, &L2);
-
-      // Compute seeds.
-      wstack_t * seeds = mem_seeds(read->seq, idx, GAMMA);
-
-      // Return if no seeds were found
-      if (seeds->pos == 0) {
-        // Did not find anything.
-        free(seeds);
-        // Output in sam format.
-	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-			    read->name+1, read->seq, read->phred);
-	output[i] = malloc(olen+1);
-	exit_error(output[i] == NULL);
-        sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-		read->name+1, read->seq, read->phred);
-        continue;
-      }
-
-      // Compute N(L1,L2)
-      const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
-      uN0_t uN0 = estimate_N0(L1, L2, idx, lambda);
-
-      // Quick mode: only align longest MEMs
-      seed_t *longest_mem = NULL;
-      if (uN0.N0 > QUICK_DUPLICATES) {
-        longest_mem = filter_longest_mem(seeds);
-      }
-
-      alnstack_t * alnstack = mapread(seeds, read->seq, idx, rlen, batch->lineid + i);
-
-      // Did not find anything.
-      if (alnstack->pos == 0) {
-	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-			    read->name+1, read->seq, read->phred);
-	output[i] = malloc(olen+1);
-	exit_error(output[i] == NULL);
-        sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-		read->name+1, read->seq, read->phred);
-        free(alnstack);
-        // Output in sam format.
-        // Free seeds
-        for (size_t i = 0; i < seeds->pos; i++) {
-          seed_t * s = (seed_t *) seeds->ptr[i];
-          free(s->sa);
-          free(s);
-        }
-        free(seeds);
-        continue;
-      }
-
-      // Pick a top alignment at "random".
-      aln_t a = alnstack->aln[(batch->lineid + i) % alnstack->pos];
-
-      int there_is_only_one_best_hit = 1;
-      if (alnstack->pos > 1) {
-         // See if the hits are actually distinct.
-         size_t ref = alnstack->aln[0].refpos;
-         for (int i = 1 ; i < alnstack->pos ; i++) {
-            if (alnstack->aln[i].refpos != ref) {
-               there_is_only_one_best_hit = 0;
-               break;
-            }
-         }
-      }
-
-      if (there_is_only_one_best_hit) {
-      a.qual = uN0.N0 > QUICK_DUPLICATES ?
-        quality_low(rlen, longest_mem, uN0) :
-	 quality(a, read->seq, idx, uN0, batch->mutex_sesame);
-      }
-      else {
-        a.qual = 1-1./alnstack->pos;
-      }
+      // Reset output
+      batch->output->pos = 0;
+      for (size_t i = 0; i < batch->reads->pos; i++) {
 	 
-      // Report mapping results
-      pos_t pos = get_pos(a.refpos, idx.chr);
-      // Output in sam format.
-      int bits = pos.strand ? 0 : 16;
-      size_t leftpos = pos.strand ? pos.pos : pos.pos - rlen+1;
-      int olen = snprintf(NULL, 0, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-			  read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
-			  rlen, read->seq, read->phred, a.score);
+	 read_t * read = (read_t *)batch->reads->ptr[i];
+	 size_t rlen = strlen(read->seq);
+      
+	 // Compute L1, L2 and MEMs.
+	 seed_t L1, L2;
+	 extend_L1L2(read->seq, rlen, idx, &L1, &L2);
 
-      output[i] = malloc(olen+1);
-      exit_error(output[i] == NULL);
-      sprintf(output[i], "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-         read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
-         rlen, read->seq, read->phred, a.score);
+	 // Compute seeds.
+	 wstack_t * seeds = mem_seeds(read->seq, idx, GAMMA);
 
-      // Free seeds
-      for (size_t i = 0; i < seeds->pos; i++) {
-	 seed_t * s = (seed_t *) seeds->ptr[i];
-	 free(s->sa);
-	 free(s);
+	 // Return if no seeds were found
+	 if (seeds->pos == 0) {
+	    // Did not find anything.
+	    free(seeds);
+	    // Output in sam format.
+	    int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+				read->name+1, read->seq, read->phred);
+	    outstr = malloc(olen+1);
+	    exit_error(outstr == NULL);
+	    sprintf(outstr, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+		    read->name+1, read->seq, read->phred);
+	    batch->output->ptr[batch->output->pos++] = outstr;
+	    continue;
+	 }
+
+	 // Compute N(L1,L2)
+	 const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
+	 uN0_t uN0 = estimate_N0(L1, L2, idx, lambda);
+
+	 // Quick mode: only align longest MEMs
+	 seed_t *longest_mem = NULL;
+	 if (uN0.N0 > QUICK_DUPLICATES) {
+	    longest_mem = filter_longest_mem(seeds);
+	 }
+
+	 alnstack_t * alnstack = mapread(seeds, read->seq, idx, rlen, batch->lineid + i);
+
+	 // Did not find anything.
+	 if (alnstack->pos == 0) {
+	    int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+				read->name+1, read->seq, read->phred);
+	    outstr = malloc(olen+1);
+	    exit_error(outstr == NULL);
+	    sprintf(outstr, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+		    read->name+1, read->seq, read->phred);
+	    batch->output->ptr[batch->output->pos++] = outstr;
+	    free(alnstack);
+	    // Output in sam format.
+	    // Free seeds
+	    for (size_t i = 0; i < seeds->pos; i++) {
+	       seed_t * s = (seed_t *) seeds->ptr[i];
+	       free(s->sa);
+	       free(s);
+	    }
+	    free(seeds);
+	    continue;
+	 }
+
+	 // Pick a top alignment at "random".
+	 aln_t a = alnstack->aln[(batch->lineid + i) % alnstack->pos];
+
+	 int there_is_only_one_best_hit = 1;
+	 if (alnstack->pos > 1) {
+	    // See if the hits are actually distinct.
+	    size_t ref = alnstack->aln[0].refpos;
+	    for (int i = 1 ; i < alnstack->pos ; i++) {
+	       if (alnstack->aln[i].refpos != ref) {
+		  there_is_only_one_best_hit = 0;
+		  break;
+	       }
+	    }
+	 }
+
+	 if (there_is_only_one_best_hit) {
+	    a.qual = uN0.N0 > QUICK_DUPLICATES ?
+	       quality_low(rlen, longest_mem, uN0) :
+	       quality(a, read->seq, idx, uN0, batch->mutex_sesame);
+	 }
+	 else {
+	    a.qual = 1-1./alnstack->pos;
+	 }
+	 
+	 // Report mapping results
+	 pos_t pos = get_pos(a.refpos, idx.chr);
+	 // Output in sam format.
+	 int bits = pos.strand ? 0 : 16;
+	 size_t leftpos = pos.strand ? pos.pos : pos.pos - rlen+1;
+	 int olen = snprintf(NULL, 0, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
+			     read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+			     rlen, read->seq, read->phred, a.score);
+
+	 outstr = malloc(olen+1);
+	 exit_error(outstr == NULL);
+	 sprintf(outstr, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
+		 read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+		 rlen, read->seq, read->phred, a.score);
+	 batch->output->ptr[batch->output->pos++] = outstr;
+	 
+	 // Free seeds
+	 for (size_t i = 0; i < seeds->pos; i++) {
+	    seed_t * s = (seed_t *) seeds->ptr[i];
+	    free(s->sa);
+	    free(s);
+	 }
+	 free(seeds);
+
+	 // Free alignments
+	 for(size_t i = 0; i < alnstack->pos; i++)
+	    free(alnstack->aln[i].refseq);
+	 free(alnstack);
+
+	 // Free read
+	 free(read->name);
+	 free(read->seq);
+	 free(read->phred);
+	 free(read);
       }
-      free(seeds);
 
-      // Free alignments
-      for(size_t i = 0; i < alnstack->pos; i++)
-         free(alnstack->aln[i].refseq);
-      free(alnstack);
-
-      // Free read
-      free(read->name);
-      free(read->seq);
-      free(read->phred);
-      free(read);
+      // Decrease active threads
+      pthread_mutex_lock(batch->mutex);
+      batch->status = output;
+      *act_threads = *act_threads - 1;
+      pthread_cond_signal(batch->cond_threads);
+      pthread_cond_signal(batch->cond_writer);
+      pthread_mutex_unlock(batch->mutex);
    }
-
-   // Decrease active threads
-   pthread_mutex_lock(batch->mutex_reader);
-   *(batch->act_threads) = *(batch->act_threads) - 1;
-   pthread_cond_signal(batch->cond_reader);
-   pthread_mutex_unlock(batch->mutex_reader);
-
-   // Signal writer monitor
-   pthread_mutex_lock(batch->mutex_writer);
-   batch->done = batch->reads->pos;
-   free(batch->reads);
-   pthread_cond_signal(batch->cond_writer);
-   pthread_mutex_unlock(batch->mutex_writer);
-
-
    return NULL;
 }
 
@@ -790,24 +815,31 @@ mt_write
    batch_t * batch = warg->first_batch;
 
    while(1) {
-      while (batch && batch->done >= 0) {
+      while (batch && batch->status == output) {
 	 // Write all output strings
-	 for (size_t i = 0; i < batch->done; i++) {
-	    fprintf(stdout, "%s", batch->output[i]);
-	    free(batch->output[i]);
+	 for (size_t i = 0; i < batch->output->pos; i++) {
+	    fprintf(stdout, "%s", (char *)batch->output->ptr[i]);
+	    free(batch->output->ptr[i]);
 	 }
 
-	 // Free current batch and follow linked list
-	 batch_t * next_batch = batch->next_batch;
-	 free(batch->output);
-	 free(batch);
-	 batch = next_batch;
+	 // Wait until next batch is assigned
+	 pthread_mutex_lock(warg->mutex);
+	 while (batch->next_batch == (void *)-1)
+	    pthread_cond_wait(warg->cond_writer, warg->mutex);
+
+	 // Got new batch, release old one
+	 batch->status = idle;
+	 batch = batch->next_batch;
+
+	 // Signal reader, batch is idle
+	 pthread_cond_signal(warg->cond_reader);
+	 pthread_mutex_unlock(warg->mutex);
       }
 
       if (!batch) break;
 
       pthread_mutex_lock(warg->mutex);
-      pthread_cond_wait(warg->cond, warg->mutex);
+      pthread_cond_wait(warg->cond_writer, warg->mutex);
       pthread_mutex_unlock(warg->mutex);
    }
 
@@ -853,26 +885,72 @@ mt_read
    int act_threads = 0;
    
    // Create mutex and monitors
+   pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
    pthread_mutex_t mutex_sesame = PTHREAD_MUTEX_INITIALIZER;
-   pthread_mutex_t mutex_reader = PTHREAD_MUTEX_INITIALIZER, mutex_writer = PTHREAD_MUTEX_INITIALIZER;
-   pthread_cond_t  cond_reader  = PTHREAD_COND_INITIALIZER,  cond_writer  = PTHREAD_COND_INITIALIZER;
-   
-   // Create first batch
-   batch_t * batch = calloc(1, sizeof(batch_t));
-   exit_error(batch == NULL);
-   batch->done = -1;
+   pthread_cond_t  cond_reader  = PTHREAD_COND_INITIALIZER;
+   pthread_cond_t  cond_writer  = PTHREAD_COND_INITIALIZER;
+   pthread_cond_t  cond_threads = PTHREAD_COND_INITIALIZER;
+   pthread_cond_t * cond_reads  = malloc(2*MAXTHREADS*sizeof(pthread_cond_t));
+   exit_error(!cond_reads);
 
-   // Create writer thread
-   writerarg_t warg = (writerarg_t){batch, &mutex_writer, &cond_writer};
+   // Allocate batches
+   pthread_t * worker = malloc(2*MAXTHREADS*sizeof(pthread_t));
+   batch_t ** batch = malloc(2*MAXTHREADS*sizeof(batch_t));
+   exit_error(batch == NULL || worker == NULL);
+   
+   // Allocate and fill static batch info   
+   for (int i = 0; i < 2*MAXTHREADS; i++) {
+      // Alloc batch
+      batch[i] = malloc(sizeof(batch_t));
+      exit_error(batch[i] == NULL);
+      // Initialize static info
+      batch[i]->idx          = idx;
+      batch[i]->reads        = stack_new(BATCHSIZE);
+      batch[i]->output       = stack_new(BATCHSIZE);
+      batch[i]->status       = idle;
+      batch[i]->act_threads  = &act_threads;
+      batch[i]->mutex        = &mutex;
+      batch[i]->mutex_sesame = &mutex_sesame;
+      batch[i]->cond_reader  = &cond_reader;
+      batch[i]->cond_writer  = &cond_writer;
+      batch[i]->cond_reads   = cond_reads+i;
+      batch[i]->cond_threads = &cond_threads;
+
+      exit_error(!batch[i]->reads || !batch[i]->output);
+      
+      // Spawn thread
+      pthread_cond_init(cond_reads+i, NULL);
+      pthread_create(worker+i, NULL, batch_map, batch[i]);
+   }
+
+   // Spawn writer thread
+   writerarg_t warg = (writerarg_t){batch[0], &mutex, &cond_writer, &cond_reader};
    pthread_t writer_thread;
    pthread_create(&writer_thread, NULL, mt_write, &warg);
 
+   int last_worker = -1;
    while (1) {
-      wstack_t * reads = stack_new(BATCHSIZE);
-      // Read input batch
-      while ((success = parse_read(inputf, format, &reads))) {
+      // Find idle worker
+      int w = -1;
+      pthread_mutex_lock(&mutex);
+      for (int i = (last_worker+1)%(2*MAXTHREADS), j = 0; j < 2*MAXTHREADS; i = (i+1)%(2*MAXTHREADS), j++) {
+	 if (batch[i]->status == idle && i != last_worker) {
+	    w = i;
+	    break;
+	 }
+      }
+      if (w == -1) {
+	 pthread_cond_wait(&cond_reader, &mutex);
+	 pthread_mutex_unlock(&mutex);
+	 continue;
+      }
+      pthread_mutex_unlock(&mutex);
+
+      // Thread is idle, can modify without race conditions
+      batch[w]->reads->pos = 0;
+      while ((success = parse_read(inputf, format, &(batch[w]->reads)))) {
 	 // Set sesame static params	    
-	 size_t rlen = strlen(((read_t *)reads->ptr[reads->pos-1])->seq);
+	 size_t rlen = strlen(((read_t *)batch[w]->reads->ptr[batch[w]->reads->pos-1])->seq);
 	 if (rlen > maxlen) {
 	    maxlen = rlen;
 	    pthread_mutex_lock(&mutex_sesame);
@@ -881,7 +959,7 @@ mt_read
 	 }
 
 	 line++;
-	 if (reads->pos == reads->max)
+	 if (batch[w]->reads->pos == batch[w]->reads->max)
 	    break;
       }
 
@@ -890,53 +968,56 @@ mt_read
 	 exit(EXIT_FAILURE);
       }
 
-      // Alloc next batch to get linked list pointer
-      batch_t * next_batch = NULL;
-      if (success) {
-	 next_batch = calloc(1, sizeof(batch_t));
-	 next_batch->done = -1;
-	 exit_error(next_batch == NULL);
+      // Batch linked list
+      if (last_worker >= 0) {
+	 pthread_mutex_lock(&mutex);
+	 batch[last_worker]->next_batch = batch[w];
+	 pthread_cond_signal(&cond_writer);
+	 pthread_mutex_unlock(&mutex);
       }
 
-      // Fill batch info
-      batch->idx           = idx;
-      batch->lineid        = line - reads->pos;
-      batch->reads         = reads;
-      batch->output        = NULL;
-      batch->act_threads   = &act_threads;
-      batch->mutex_sesame  = &mutex_sesame;
-      batch->mutex_reader  = &mutex_reader;
-      batch->mutex_writer  = &mutex_writer;
-      batch->cond_reader   = &cond_reader;
-      batch->cond_writer   = &cond_writer;
-      batch->next_batch    = next_batch;
+      // Flag next batch
+      if (success) {
+	 batch[w]->next_batch = (void *) -1;
+	 last_worker = w;
+      } else {
+	 // Last batch
+	 batch[w]->next_batch = NULL;
+	 last_worker = -1;
+      }
 
-      // Create new thread
-      pthread_mutex_lock(&mutex_reader);
-      act_threads++;
-      pthread_mutex_unlock(&mutex_reader);
-      
-      pthread_t thread;
-      if (pthread_create(&thread, NULL, batch_map, batch)) exit_error(1);
-      pthread_detach(thread);
+      // Signal worker
+      pthread_mutex_lock(&mutex);
+      batch[w]->status = map;
+      pthread_cond_signal(batch[w]->cond_reads);
+      pthread_mutex_unlock(&mutex);
 
       // Break on last batch
-      if (next_batch == NULL) break;
-
-      // Wait for condition signal (available threads)
-      pthread_mutex_lock(&mutex_reader);
-      while (act_threads >= MAXTHREADS)
-	 pthread_cond_wait(&cond_reader, &mutex_reader);
-      pthread_mutex_unlock(&mutex_reader);
-
-      batch = next_batch;
+      if (last_worker == -1) break;
    }
 
    // Wait for writer.
    pthread_join(writer_thread, NULL);
 
-   // Free stuff
+   // Signal worker threads
+   pthread_mutex_lock(&mutex);
+   for (int i = 0; i < 2*MAXTHREADS; i++) {
+      batch[i]->status = die;
+      pthread_cond_signal(batch[i]->cond_reads);
+   }
+   pthread_mutex_unlock(&mutex);
+
+   // Free memory
+   for (int i = 0; i < 2*MAXTHREADS; i++) {
+      pthread_join(worker[i], NULL);
+      free(batch[i]->reads);
+      free(batch[i]->output);
+      free(batch[i]);
+   }
    free(buff);
+   free(worker);
+   free(batch);
+   free(cond_reads);
    fclose(inputf);
    free_index_chr(idx.chr);
    sesame_clean();
