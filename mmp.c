@@ -4,6 +4,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "bwt.h"
 #include "map.h"
@@ -19,6 +20,7 @@
 
 typedef struct uN0_t uN0_t;
 typedef struct seedp_t seedp_t;
+typedef struct txtbuf_t txtbuf_t;
 typedef struct read_t read_t;
 typedef struct writerarg_t writerarg_t;
 typedef struct batch_t batch_t;
@@ -27,6 +29,12 @@ struct uN0_t {
    double u;
    size_t N0;
    double p0;
+};
+
+struct txtbuf_t {
+   size_t size;
+   size_t pos;
+   char   txt[];
 };
 
 struct read_t {
@@ -41,23 +49,26 @@ struct seedp_t {
 };
 
 struct writerarg_t {
-   batch_t * first_batch;
+   batch_t         * first_batch;
    pthread_mutex_t * mutex;
    pthread_cond_t  * cond;
+   pthread_cond_t  * cond_reader;
 };
+
+enum status_t {idle = 0, map = 1, output = 2};
 
 struct batch_t {
    // Data
-   index_t     idx;
-   size_t      lineid;
-   wstack_t  * reads;
-   char     ** output;
+   index_t           idx;
+   size_t            lineid;
+   size_t            n_reads;
+   txtbuf_t        * readbuf;
+   txtbuf_t        * outbuf;
    // Thread signaling
-   int               done;
+   enum status_t     status;
    int             * act_threads;
    pthread_mutex_t * mutex_sesame;
-   pthread_mutex_t * mutex_reader;
-   pthread_mutex_t * mutex_writer;
+   pthread_mutex_t * mutex;
    pthread_cond_t  * cond_reader;
    pthread_cond_t  * cond_writer;
    batch_t         * next_batch;
@@ -83,6 +94,52 @@ char* HELP_MSG =
 double digamma(double);
 double trigamma(double);
 
+txtbuf_t *
+txtbuf_new
+(
+ size_t size
+)
+{
+   txtbuf_t * buf = malloc(sizeof(txtbuf_t) + size);
+   exit_error(buf == NULL);
+
+   buf->pos = 0;
+   buf->size = size;
+
+   return buf;
+}
+
+void
+buf_pushtxt
+(
+ char      * txt,
+ txtbuf_t ** bufp
+)
+{
+   size_t slen = strlen(txt);
+   txtbuf_t * buf = *bufp;
+
+   if (buf->pos + slen >= buf->size) {
+      size_t newsize = buf->size + slen + 1;
+      *bufp = buf = realloc(buf, sizeof(txtbuf_t) + newsize);
+      exit_error(buf == NULL);
+      buf->size = newsize;
+   }
+
+   memcpy(buf->txt + buf->pos, txt, slen+1);
+   buf->pos += slen;
+}
+
+void
+buf_reset
+(
+ txtbuf_t * buf
+)
+{
+   buf->pos = 0;
+   if (buf->size > 0)
+      *buf->txt = 0;
+}
 
 void
 build_index
@@ -574,61 +631,57 @@ print_sam_header
 }
 
 
-int
-parse_read
+read_t
+next_read
 (
-        FILE      * inputf,
-   enum fmt_t       format,
-	wstack_t ** stack
+        char   ** txt,
+   enum fmt_t     format
 )
 {
-  size_t n = 0;
-  ssize_t len = 0;
-  read_t * read = calloc(1, sizeof(read_t));
-  if (format == fasta) {
-    // Read 2 lines.
-    //name
-    len = getline(&(read->name), &n, inputf);
-    if (len == -1) return 0;
-    if (read->name[len-1] == '\n') read->name[len-1] = 0;
-
-    //seq
-    n = 0;
-    len = getline(&(read->seq), &n, inputf);
-    if (len == -1) return -1;
-    if (read->seq[len-1] == '\n') read->seq[len-1] = 0;
-
-    //no quality
-    read->phred = strdup("*");
-    
-    push(read, stack);
-    return 1;
-  }
-  if (format == fastq) {
-    // name
-    len = getline(&(read->name), &n, inputf);
-    if (len == -1) return 0;
-    strtok(read->name, " \t\n");
-
-    // seq
-    n = 0;
-    len = getline(&(read->seq), &n, inputf);
-    if (len == -1) return -1;
-    strtok(read->seq, "\n");
-    
-    // + (skip line)
-    if(fscanf(inputf, "%*[^\n]\n") < 0) return -1;
-    
-    // phred
-    n = 0;
-    len = getline(&(read->phred), &n, inputf);
-    if (len == -1) return -1;
-    strtok(read->phred, "\n");
-
-    push(read, stack);
-    return 1;
-  }
-  return -1;
+   read_t read;
+   if (format == fasta) {
+      read.phred = "*";
+      // Name
+      read.name = *txt;
+      // Mark Name string end
+      read.seq  = strchr(read.name, '\n');
+      *read.seq = 0;
+      read.seq++;
+      // Cut long read names
+      strtok(read.name, "\t ");
+      // Mark Seq string end and update txt pointer
+      *txt = strchr(read.seq, '\n');
+      if (*txt) {
+	 // Last line may not end with '\n'
+	 **txt = 0;
+	 *txt += 1;
+      } else {
+	 *txt = strchr(read.seq, '\0') + 1;
+      }
+   } else {
+      // Name
+      read.name = *txt;
+      // Mark Name string end
+      read.seq  = strchr(read.name, '\n');
+      *read.seq = 0;
+      read.seq++;
+      // Cut long read names
+      strtok(read.name, "\t ");
+      // Mark Seq string end
+      read.phred = strchr(read.seq, '\n');
+      *read.phred = 0;
+      read.phred = strchr(read.phred+1, '\n') + 1;
+      // Mark Phred string end and update txt pointer
+      *txt = strchr(read.phred, '\n');
+      if (*txt) {
+	 // Last line may not end with '\n'
+	 **txt = 0;
+	 *txt += 1;
+      } else {
+	 *txt = strchr(read.phred, '\0') + 1;
+      }
+   }
+   return read;
 }
 
 void *
@@ -638,23 +691,30 @@ batch_map
 )
 {
    batch_t * batch  = (batch_t *)arg;
-   char   ** output = malloc(batch->reads->pos * sizeof(char *));
-   exit_error(output == NULL);
-   batch->output = output;
-
    index_t idx = batch->idx;
-   
-   for (size_t i = 0; i < batch->reads->pos; i++) {
+   char  * txt = batch->readbuf->txt;
 
-      read_t * read = (read_t *)batch->reads->ptr[i];
-      size_t rlen = strlen(read->seq);
+   // Check read format
+   enum fmt_t format = unset;
+   if (txt[0] == '>') format = fasta;
+   else format = fastq;
+
+   // Output line buffer
+   size_t samsz   = 1024;
+   char * samline = malloc(samsz);
+   exit_error(samline == NULL);
+   
+   read_t read;
+   for (size_t i = 0; i < batch->n_reads; i++) {
+      read = next_read(&txt, format);
+      size_t rlen = strlen(read.seq);
       
       // Compute L1, L2 and MEMs.
       seed_t L1, L2;
-      extend_L1L2(read->seq, rlen, idx, &L1, &L2);
+      extend_L1L2(read.seq, rlen, idx, &L1, &L2);
 
       // Compute seeds.
-      wstack_t * seeds = mem_seeds(read->seq, idx, GAMMA);
+      wstack_t * seeds = mem_seeds(read.seq, idx, GAMMA);
 
       // Return if no seeds were found
       if (seeds->pos == 0) {
@@ -662,11 +722,15 @@ batch_map
         free(seeds);
         // Output in sam format.
 	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-			    read->name+1, read->seq, read->phred);
-	output[i] = malloc(olen+1);
-	exit_error(output[i] == NULL);
-        sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-		read->name+1, read->seq, read->phred);
+			    read.name+1, read.seq, read.phred);
+	if (olen+1 > samsz) {
+	   samsz = olen+1;
+	   samline = realloc(samline, samsz);
+	   exit_error(samline == NULL);
+	}
+        sprintf(samline, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+		read.name+1, read.seq, read.phred);
+	buf_pushtxt(samline, &(batch->outbuf));
         continue;
       }
 
@@ -680,16 +744,20 @@ batch_map
         longest_mem = filter_longest_mem(seeds);
       }
 
-      alnstack_t * alnstack = mapread(seeds, read->seq, idx, rlen, batch->lineid + i);
+      alnstack_t * alnstack = mapread(seeds, read.seq, idx, rlen, batch->lineid + i);
 
       // Did not find anything.
       if (alnstack->pos == 0) {
 	int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-			    read->name+1, read->seq, read->phred);
-	output[i] = malloc(olen+1);
-	exit_error(output[i] == NULL);
-        sprintf(output[i], "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-		read->name+1, read->seq, read->phred);
+			    read.name+1, read.seq, read.phred);
+	if (olen+1 > samsz) {
+	   samsz = olen+1;
+	   samline = realloc(samline, samsz);
+	   exit_error(samline == NULL);
+	}
+        sprintf(samline, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+		read.name+1, read.seq, read.phred);
+	buf_pushtxt(samline, &(batch->outbuf));
         free(alnstack);
         // Output in sam format.
         // Free seeds
@@ -720,7 +788,7 @@ batch_map
       if (there_is_only_one_best_hit) {
       a.qual = uN0.N0 > QUICK_DUPLICATES ?
         quality_low(rlen, longest_mem, uN0) :
-	 quality(a, read->seq, idx, uN0, batch->mutex_sesame);
+	 quality(a, read.seq, idx, uN0, batch->mutex_sesame);
       }
       else {
         a.qual = 1-1./alnstack->pos;
@@ -732,15 +800,18 @@ batch_map
       int bits = pos.strand ? 0 : 16;
       size_t leftpos = pos.strand ? pos.pos : pos.pos - rlen+1;
       int olen = snprintf(NULL, 0, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-			  read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
-			  rlen, read->seq, read->phred, a.score);
-
-      output[i] = malloc(olen+1);
-      exit_error(output[i] == NULL);
-      sprintf(output[i], "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-         read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
-         rlen, read->seq, read->phred, a.score);
-
+			  read.name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+			  rlen, read.seq, read.phred, a.score);
+      if (olen+1 > samsz) {
+	 samsz = olen+1;
+	 samline = realloc(samline, samsz);
+	 exit_error(samline == NULL);
+      }
+      sprintf(samline, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
+         read.name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
+         rlen, read.seq, read.phred, a.score);
+      buf_pushtxt(samline, &(batch->outbuf));
+      
       // Free seeds
       for (size_t i = 0; i < seeds->pos; i++) {
 	 seed_t * s = (seed_t *) seeds->ptr[i];
@@ -753,27 +824,20 @@ batch_map
       for(size_t i = 0; i < alnstack->pos; i++)
          free(alnstack->aln[i].refseq);
       free(alnstack);
-
-      // Free read
-      free(read->name);
-      free(read->seq);
-      free(read->phred);
-      free(read);
    }
 
+   pthread_mutex_lock(batch->mutex);
    // Decrease active threads
-   pthread_mutex_lock(batch->mutex_reader);
    *(batch->act_threads) = *(batch->act_threads) - 1;
    pthread_cond_signal(batch->cond_reader);
-   pthread_mutex_unlock(batch->mutex_reader);
 
    // Signal writer monitor
-   pthread_mutex_lock(batch->mutex_writer);
-   batch->done = batch->reads->pos;
-   free(batch->reads);
+   batch->status = output;
    pthread_cond_signal(batch->cond_writer);
-   pthread_mutex_unlock(batch->mutex_writer);
+   pthread_mutex_unlock(batch->mutex);
 
+   // Free variables
+   free(samline);
 
    return NULL;
 }
@@ -790,18 +854,25 @@ mt_write
    batch_t * batch = warg->first_batch;
 
    while(1) {
-      while (batch && batch->done >= 0) {
-	 // Write all output strings
-	 for (size_t i = 0; i < batch->done; i++) {
-	    fprintf(stdout, "%s", batch->output[i]);
-	    free(batch->output[i]);
-	 }
+      while (batch && batch->status == output) {
+	 // TODO:
+	 // - set in_use to 0
+	 // - signal reader
+	 
+	 // Write output buffer
+	 fprintf(stdout, "%s", batch->outbuf->txt);
 
-	 // Free current batch and follow linked list
-	 batch_t * next_batch = batch->next_batch;
-	 free(batch->output);
-	 free(batch);
-	 batch = next_batch;
+
+	 pthread_mutex_lock(warg->mutex);
+	 // Free batch and signal reader
+	 batch->status = idle;
+	 pthread_cond_signal(warg->cond_reader);
+	 // Wait until next batch is assigned
+	 while (batch->next_batch == (void *)-1)
+	    pthread_cond_wait(warg->cond, warg->mutex);
+	 pthread_mutex_unlock(warg->mutex);
+	 
+	 batch = batch->next_batch;
       }
 
       if (!batch) break;
@@ -821,7 +892,7 @@ mt_read
    const char * readsfname
 )
 {
-   size_t maxlen = 0; // Max 'k' value for seeding probabilities.
+   ssize_t maxlen = 0; // Max 'k' value for seeding probabilities.
    
    fprintf(stderr, "loading index... ");
    // Load index files.
@@ -838,105 +909,147 @@ mt_read
    // Look at the first character.
    char first = getc(inputf);
    if (first == '>') format = fasta;
-   if (first == '@') format = fastq;
+   else if (first == '@') format = fastq;
+   else {
+      fprintf(stderr, "error: unrecognized input format (must be fasta or fastq)\n");
+      exit(1);
+   }
    ungetc(first, inputf);
    print_sam_header(idx);
 
-   int success = 0;
-
-   size_t sz = 256, line = 0;
-   char * buff = malloc(sz);
-   exit_error(buff == NULL);
+   int lines_read;
+   if (format == fasta) lines_read = 2;
+   else lines_read = 4;
 
    // Multithreading variables
    int BATCHSIZE = 10000;
    int act_threads = 0;
-   
+
+   // Read buffer variables
+   int b = -1, b_it = 0, success = 0;
+   size_t sz = 256, line = 0;
+   char   * lineptr = malloc(sz);
+
    // Create mutex and monitors
    pthread_mutex_t mutex_sesame = PTHREAD_MUTEX_INITIALIZER;
-   pthread_mutex_t mutex_reader = PTHREAD_MUTEX_INITIALIZER, mutex_writer = PTHREAD_MUTEX_INITIALIZER;
-   pthread_cond_t  cond_reader  = PTHREAD_COND_INITIALIZER,  cond_writer  = PTHREAD_COND_INITIALIZER;
-   
-   // Create first batch
-   batch_t * batch = calloc(1, sizeof(batch_t));
+   pthread_mutex_t mutex        = PTHREAD_MUTEX_INITIALIZER;
+   pthread_cond_t  cond_reader  = PTHREAD_COND_INITIALIZER, cond_writer = PTHREAD_COND_INITIALIZER;
+
+   // Create batches
+   batch_t * last_batch = NULL;
+   batch_t ** batch = malloc(2*MAXTHREADS * sizeof(void*));
    exit_error(batch == NULL);
-   batch->done = -1;
+   for (int i = 0; i < 2*MAXTHREADS; i++) {
+      batch[i] = malloc(sizeof(batch_t));
+      exit_error(batch[i] == NULL);
+      batch[i]->idx          = idx;
+      batch[i]->readbuf      = txtbuf_new(100*BATCHSIZE);
+      batch[i]->outbuf       = txtbuf_new(100*BATCHSIZE);
+      batch[i]->status       = idle;
+      batch[i]->act_threads  = &act_threads;
+      batch[i]->mutex_sesame = &mutex_sesame;
+      batch[i]->mutex        = &mutex;
+      batch[i]->cond_reader  = &cond_reader;
+      batch[i]->cond_writer  = &cond_writer;
+      batch[i]->next_batch   = (void *)-1;
+   }
 
    // Create writer thread
-   writerarg_t warg = (writerarg_t){batch, &mutex_writer, &cond_writer};
+   writerarg_t warg = (writerarg_t){batch[0], &mutex, &cond_writer, &cond_reader};
    pthread_t writer_thread;
    pthread_create(&writer_thread, NULL, mt_write, &warg);
 
    while (1) {
-      wstack_t * reads = stack_new(BATCHSIZE);
+      // Select next buffer
+      pthread_mutex_lock(&mutex);
+      do {
+	 // Find free buffer
+	 for (b_it = 0; b_it < 2*MAXTHREADS; b_it++) {
+	    b = (b+1)%(2*MAXTHREADS);
+	    if (batch[b]->status == idle) {
+	       buf_reset(batch[b]->readbuf);
+	       buf_reset(batch[b]->outbuf);
+	       break;
+	    }
+	 }
+	 
+	 // Wait for free buffer (writer may be busy)
+	 if (b_it == 2*MAXTHREADS)
+	    pthread_cond_wait(&cond_reader, &mutex);
+	 
+      } while (b_it == 2*MAXTHREADS);
+      
+      if (last_batch) {
+	 // Complete linked list and signal writer
+	 last_batch->next_batch = batch[b];
+	 pthread_cond_signal(&cond_writer);
+      }
+      pthread_mutex_unlock(&mutex);
+
+      last_batch = batch[b];
+      
       // Read input batch
-      while ((success = parse_read(inputf, format, &reads))) {
-	 // Set sesame static params	    
-	 size_t rlen = strlen(((read_t *)reads->ptr[reads->pos-1])->seq);
-	 if (rlen > maxlen) {
-	    maxlen = rlen;
+      size_t n_lines = 0;
+      size_t line_id = line;
+      while ((success = getline(&lineptr, &sz, inputf)) > 0) {
+	 // Set sesame static params
+	 if (line%lines_read == 1 && strlen(lineptr)-1 > maxlen) {
+	    maxlen = strlen(lineptr)-(lineptr[strlen(lineptr)-1] == '\n');
 	    pthread_mutex_lock(&mutex_sesame);
 	    sesame_set_static_params(GAMMA, maxlen, PROB);
 	    pthread_mutex_unlock(&mutex_sesame);
 	 }
 
-	 line++;
-	 if (reads->pos == reads->max)
+	 // Push line to buffer
+	 buf_pushtxt(lineptr, &(batch[b]->readbuf));
+
+	 line++; n_lines++;
+
+	 if (n_lines >= BATCHSIZE*lines_read)
 	    break;
       }
 
-      if (success < 0) {
+      if (success < 0 && (errno == EINVAL || errno == ENOMEM)) {
 	 fprintf(stderr, "error while reading input file (line %ld)\n", line+1);
 	 exit(EXIT_FAILURE);
       }
 
-      // Alloc next batch to get linked list pointer
-      batch_t * next_batch = NULL;
-      if (success) {
-	 next_batch = calloc(1, sizeof(batch_t));
-	 next_batch->done = -1;
-	 exit_error(next_batch == NULL);
-      }
-
-      // Fill batch info
-      batch->idx           = idx;
-      batch->lineid        = line - reads->pos;
-      batch->reads         = reads;
-      batch->output        = NULL;
-      batch->act_threads   = &act_threads;
-      batch->mutex_sesame  = &mutex_sesame;
-      batch->mutex_reader  = &mutex_reader;
-      batch->mutex_writer  = &mutex_writer;
-      batch->cond_reader   = &cond_reader;
-      batch->cond_writer   = &cond_writer;
-      batch->next_batch    = next_batch;
-
+      // Fill new batch info
+      batch[b]->next_batch = success < 1 ? NULL: (void *)-1;
+      batch[b]->lineid     = line_id/lines_read;
+      batch[b]->n_reads    = n_lines/lines_read;
+      batch[b]->status     = map;
+      
       // Create new thread
-      pthread_mutex_lock(&mutex_reader);
+      pthread_mutex_lock(&mutex);
       act_threads++;
-      pthread_mutex_unlock(&mutex_reader);
+      pthread_mutex_unlock(&mutex);
       
       pthread_t thread;
-      if (pthread_create(&thread, NULL, batch_map, batch)) exit_error(1);
+      if (pthread_create(&thread, NULL, batch_map, batch[b])) exit_error(1);
       pthread_detach(thread);
 
       // Break on last batch
-      if (next_batch == NULL) break;
+      if (success < 1) break;
 
       // Wait for condition signal (available threads)
-      pthread_mutex_lock(&mutex_reader);
+      pthread_mutex_lock(&mutex);
       while (act_threads >= MAXTHREADS)
-	 pthread_cond_wait(&cond_reader, &mutex_reader);
-      pthread_mutex_unlock(&mutex_reader);
-
-      batch = next_batch;
+	 pthread_cond_wait(&cond_reader, &mutex);
+      pthread_mutex_unlock(&mutex);
    }
 
    // Wait for writer.
    pthread_join(writer_thread, NULL);
 
    // Free stuff
-   free(buff);
+   free(lineptr);
+   for (int i = 0; i < 2*MAXTHREADS; i++) {
+      free(batch[i]->readbuf);
+      free(batch[i]->outbuf);
+      free(batch[i]);
+   }
+   free(batch);
    fclose(inputf);
    free_index_chr(idx.chr);
    sesame_clean();
