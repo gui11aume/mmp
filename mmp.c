@@ -276,16 +276,20 @@ estimate_N0
    // Compute p0 (prob of the min).
    int m = fwd < bwd ? fwd : bwd;
    size_t G = idx.chr->gsize * 2;
-   // Probability of the event if there is one duplicate.
-   double prob_1 = mu * pow(1-mu, 2*m) * pow(1-pow(.25, m), G) +
-      (1-pow(1-mu,m)) * pow(1-mu,m) * (pow(1-pow(.25,m+1), G) - pow(1-pow(.25,m), G)) +
-      mu * pow(1-mu, 2*m) * (pow(1-pow(.25,m+1), G) - pow(1-pow(.25,m), G)) ;
+   // The term "(pow(1-pow(.25,m+1), G) - pow(1-pow(.25,m), G))" often
+   // underflows. We divide every probability below by this term. This
+   // simplifies "prob_2" and "prob_3", and in "prob_1", we can turn
+   // "pow(1-pow(.25, m), G)" into "(exp(3G/4^(m+1))-1)^-1".
+
+   // Probability of the event if both ends are duplicated.
+   const double approx = exp(3*G * pow(.25, m+1)) - 1.;
+   const double denom = approx < 1e-6 ? 1e-6 : approx;
+   double prob_1 = mu * pow(1-mu, 2*m) / denom +
+      (1-pow(1-mu,m)) * pow(1-mu,m) + mu * pow(1-mu, 2*m);
    // Probability of the event if one end is duplicated.
-   double prob_2 = pow(1-mu,m) *
-      (pow(1-pow(.25,m+1), G) - pow(1-pow(.25,m), G));
+   double prob_2 = pow(1-mu,m);
    // Probability of the event if no end is duplicated.
-   double prob_3 = (1.-pow(1-pow(.25,m+1), G)) *
-      (pow(1-pow(.25,m+1), G) - pow(1-pow(.25,m), G));
+   double prob_3 = (1.-pow(1-pow(.25,m+1), G));
    // Bayes formula with 1:9 prior for duplication. We assume
    // this because there is ~1:9 chance that the sequence
    // is duplicated with exactly 1 duplicate.
