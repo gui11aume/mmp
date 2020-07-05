@@ -362,8 +362,9 @@ char *
 chr_string
 (
  size_t   refpos,
- chr_t  * chr
- )
+ chr_t  * chr,
+ char   * buffer
+)
 {
    if (chr->nchr == 0)
       return NULL;
@@ -379,10 +380,8 @@ chr_string
       chrnum = bisect_search(0, chr->nchr-1, chr->start, refpos+1)-1;
    }
    size_t chrpos = refpos+1 - (chr->start[chrnum]-1);
-   int   slen    = snprintf(NULL, 0, "%s:%ld:%c", chr->name[chrnum], chrpos, strand);
-   char * str    = malloc(slen+1);
-   sprintf(str, "%s:%ld:%c", chr->name[chrnum], chrpos, strand);
-   return str;
+   snprintf(buffer, 255, "%s:%ld:%c", chr->name[chrnum], chrpos, strand);
+   return buffer;
 }
 
 pos_t
