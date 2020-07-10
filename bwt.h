@@ -160,7 +160,7 @@ struct bwt_t {
    int64_t   txtlen;      // 'strlen(txt) + 1'.
    int64_t   zero;        // Position of '$'.
    int64_t   nslots;      // Number of slots.
-   uint8_t   slots[0];     // 2-bit characters.
+   uint8_t   slots[0];    // 2-bit characters.
 };
 
 // Chromosome list.

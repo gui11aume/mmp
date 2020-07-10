@@ -14,6 +14,11 @@ debug: $(P)
 profile: CFLAGS += -pg -O0 -DNOQUAL
 profile: $(P)
 
+analyze: CC= clang --analyze
+analyze: CFLAGS += -DDEBUG -g -O0
+analyze: $(OBJECTS)
+
+
 $(P): mmp.c bwt.h $(OBJECTS)
 	$(CC) $(CFLAGS) mmp.c $(OBJECTS) -o $(P) -lm -lpthread
 #	$(CC) $(CFLAGS) mmp.c $(OBJECTS) -o $(P) -Wl,--no-as-needed -lprofiler -lm

@@ -24,6 +24,10 @@ const char REVCMP[256] = { ['g'] = 1, ['c'] = 2, ['a'] = 3,
    do { if ((x) == NULL) { fprintf(stderr, "memory error %s:%d:%s()\n", \
 				   __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
 
+#define exit_on_io_error(x)						\
+   do { if ((x) == -1) { fprintf(stderr, "I/O error %s:%d:%s()\n", \
+				   __FILE__, __LINE__, __func__); exit(EXIT_FAILURE); }} while(0)
+
 
 // SECTION 2. GLOBAL CONSTANTS OF INTEREST //
 
@@ -126,12 +130,12 @@ void bwt2occ
    // Struct header
    ssize_t bw, bt;
    uint64_t occ_mark_intv = OCC_INTERVAL_SIZE;
-   bw = write(occ_fd, &txtlen, sizeof(size_t));
-   bw = write(occ_fd, &occ_size, sizeof(uint64_t));
-   bw = write(occ_fd, &occ_mark_intv, sizeof(uint64_t));
-   bw = write(occ_fd, &word_size, sizeof(uint64_t));
-   bw = write(occ_fd, &mark_bits, sizeof(uint64_t));
-   bw = write(occ_fd, C, (SIGMA+1)*sizeof(uint64_t));
+   exit_on_io_error(write(occ_fd, &txtlen, sizeof(size_t)));
+   exit_on_io_error(write(occ_fd, &occ_size, sizeof(uint64_t)));
+   exit_on_io_error(write(occ_fd, &occ_mark_intv, sizeof(uint64_t)));
+   exit_on_io_error(write(occ_fd, &word_size, sizeof(uint64_t)));
+   exit_on_io_error(write(occ_fd, &mark_bits, sizeof(uint64_t)));
+   exit_on_io_error(write(occ_fd, C, (SIGMA+1)*sizeof(uint64_t)));
 
    // Loop variables
    int intv_words = SIGMA*(1+OCC_INTERVAL_SIZE);
@@ -234,12 +238,13 @@ bwt2sa
    // CSA struct header
    ssize_t bw, bt;
    size_t csa_ratio = CSA_SAMP_RATIO;
-   bw = write(csa_fd, &nbits, sizeof(size_t));
-   bw = write(csa_fd, &bmask, sizeof(uint64_t));
-   bw = write(csa_fd, &nint64, sizeof(size_t));
-   bw = write(csa_fd, &csa_ratio, sizeof(size_t));
+   exit_on_io_error(write(csa_fd, &nbits, sizeof(size_t)));
+   exit_on_io_error(write(csa_fd, &bmask, sizeof(uint64_t)));
+   exit_on_io_error(write(csa_fd, &nint64, sizeof(size_t)));
+   exit_on_io_error(write(csa_fd, &csa_ratio, sizeof(size_t)));
 
    // CSA buffer
+   if (nint64 == 0) exit(EXIT_FAILURE); // Security.
    uint64_t * csa_buf = calloc(nint64, sizeof(uint64_t));
 
    // Perform backward search from the end
@@ -251,19 +256,19 @@ bwt2sa
 
       // CSA (1:csa_samp_rate compression)
       if (fm_ptr%CSA_SAMP_RATIO == 0) {
-	 uint64_t saidx = i & bmask;
-	 uint64_t word = ((fm_ptr/CSA_SAMP_RATIO)*nbits)/64;
-	 uint64_t bit = ((fm_ptr/CSA_SAMP_RATIO)*nbits)%64;
+         uint64_t saidx = i & bmask;
+         uint64_t word = ((fm_ptr/CSA_SAMP_RATIO)*nbits)/64;
+         uint64_t bit = ((fm_ptr/CSA_SAMP_RATIO)*nbits)%64;
 
-	 // Write SA value (i) in sampled FM index position
-	 csa_buf[word]   |= saidx << bit;
-	 if (bit + nbits > 64)  // Split word
-	    csa_buf[word+1] |= saidx >> (64-bit);
+         // Write SA value (i) in sampled FM index position
+         csa_buf[word]   |= saidx << bit;
+         if (bit + nbits > 64)  // Split word
+            csa_buf[word+1] |= saidx >> (64-bit);
       }
 
       // Verbose progress
       if (i%10000 == 0)
-	 fprintf(stderr, "\r%.2f%%", 100-i*100.0/occ->txtlen);
+         fprintf(stderr, "\r%.2f%%", 100-i*100.0/occ->txtlen);
    }
 
    // Write sampled SA to file
@@ -293,13 +298,8 @@ index_load_chr
 
    // Alloc structure.
    chr_t * chr = malloc(sizeof(chr_t));
-   ssize_t b;
-   b = read(fd, &(chr->gsize), sizeof(size_t));
-   if (b < 1) {
-      fprintf(stderr, "error reading chr index file\n");
-      exit(EXIT_FAILURE);
-   }
-   b = read(fd, &(chr->nchr), sizeof(size_t));
+   exit_on_io_error(read(fd, &(chr->gsize), sizeof(size_t)));
+   exit_on_io_error(read(fd, &(chr->nchr), sizeof(size_t)));
    
    size_t * start = malloc(chr->nchr * sizeof(size_t));
    char  ** names = malloc(chr->nchr * sizeof(char *));
@@ -307,12 +307,12 @@ index_load_chr
    exit_on_memory_error(names);
 
    for (size_t i = 0; i < chr->nchr; i++) {
-      b = read(fd, start+i, sizeof(size_t));
+      exit_on_io_error(read(fd, start+i, sizeof(size_t)));
       size_t slen;
-      b = read(fd, &slen, sizeof(size_t));
+      exit_on_io_error(read(fd, &slen, sizeof(size_t)));
       char * name = malloc(slen);
       exit_on_memory_error(name);
-      b = read(fd, name, slen);
+      exit_on_io_error(read(fd, name, slen));
       names[i] = name;
    }
 
@@ -515,7 +515,7 @@ query_csa
  bwt_t  * bwt,
  occ_t  * occ,
  size_t   pos
- )
+)
 {
 
    if (pos == bwt->zero) return 0;
@@ -547,13 +547,13 @@ query_csa
 void
 recursive_csa_query
 (
- csa_t  * csa,
- bwt_t  * bwt,
- occ_t  * occ,
- range_t  range,
- size_t * sa_values,
- size_t   path_offset
- )
+   csa_t  * csa,
+   bwt_t  * bwt,
+   occ_t  * occ,
+   range_t  range,
+   size_t * sa_values,
+   size_t   path_offset
+)
 {
    // Beginning of reference
    if (range.bot <= bwt->zero && range.top >= bwt->zero) {
@@ -569,15 +569,15 @@ recursive_csa_query
       size_t lo  = csa->nbits * idx;
       size_t hi  = csa->nbits * (idx+1)-1;
       if (lo/64 == hi/64) {
-	 // Entry fits in a single 'uint64_t'.
-	 // Use mask to extract the n-bit encoding of the position.
-	 sa_values[offset] = (size_t) csa->bitf[lo/64] >> lo % 64 & csa->bmask;
+         // Entry fits in a single 'uint64_t'.
+         // Use mask to extract the n-bit encoding of the position.
+         sa_values[offset] = (size_t) csa->bitf[lo/64] >> lo % 64 & csa->bmask;
       }
       else {
-	 // Entry is split between two 'uint64_t'.
-	 size_t lo_bits = (size_t) csa->bitf[lo/64] >> lo % 64;
-	 size_t hi_bits = (size_t) csa->bitf[hi/64] << (64-lo) % 64;
-	 sa_values[offset] = (lo_bits | hi_bits) & csa->bmask;
+         // Entry is split between two 'uint64_t'.
+         size_t lo_bits = (size_t) csa->bitf[lo/64] >> lo % 64;
+         size_t hi_bits = (size_t) csa->bitf[hi/64] << (64-lo) % 64;
+         sa_values[offset] = (lo_bits | hi_bits) & csa->bmask;
       }
       // Add path offset to get original position.
       sa_values[offset] += path_offset;
@@ -591,8 +591,8 @@ recursive_csa_query
    size_t rlen = range.top - range.bot + 1;
    for (int i = 0; i < rlen; i++) {
       if (sa_values[i] > occ->txtlen) {
-	 done = 0;
-	 break;
+         done = 0;
+         break;
       }
    }
 
@@ -620,17 +620,18 @@ recursive_csa_query
    for (int c = 0; c < 4; c++) {
       if(!extend[c]) continue;
 
+      if (c_count[c] == 0) exit(EXIT_FAILURE); // Security.
       size_t * idx_c       = malloc(c_count[c]*sizeof(size_t));
       size_t * sa_values_c = malloc(c_count[c]*sizeof(size_t));
       exit_on_memory_error(idx_c);
       exit_on_memory_error(sa_values_c);
 
       for (int i = 0, j = 0; i < rlen; i++) {
-	 if (prev_c[i] != c) continue;
-	 // Assemble new sa_values vector for the current nucleotide.
-	 sa_values_c[j] = sa_values[i];
-	 // Store the positions of the current nucleotide in a list.
-	 idx_c[j++] = i;
+         if (prev_c[i] != c) continue;
+         // Assemble new sa_values vector for the current nucleotide.
+         sa_values_c[j] = sa_values[i];
+         // Store the positions of the current nucleotide in a list.
+         idx_c[j++] = i;
       }
 
       // Get new range.
@@ -643,7 +644,7 @@ recursive_csa_query
 
       // Place sa_values back in their original position.
       for (int i = 0; i < c_count[c]; i++) {
-	 sa_values[idx_c[i]] = sa_values_c[i];
+         sa_values[idx_c[i]] = sa_values_c[i];
       }
 
       // Free memory.
@@ -660,18 +661,17 @@ recursive_csa_query
 size_t *
 query_csa_range
 (
- csa_t  * csa,
- bwt_t  * bwt,
- occ_t  * occ,
- range_t  range
- )
+   csa_t   * csa,
+   bwt_t   * bwt,
+   occ_t   * occ,
+   range_t   range
+)
 {
    ssize_t nloc = range.top - range.bot + 1;
    size_t * sa_values = malloc(nloc * sizeof(size_t));
    exit_on_memory_error(sa_values);
    // Flag all positions as missing
-   for (size_t i = 0; i < nloc; i++)
-      sa_values[i] = occ->txtlen+1;
+   for (size_t i = 0; i < nloc; i++) sa_values[i] = occ->txtlen+1;
 
    // Do the recursive search
    recursive_csa_query(csa, bwt, occ, range, sa_values, 0);
@@ -682,10 +682,10 @@ query_csa_range
 char *
 decompress_genome
 (
- char * dna,
- size_t pos,
- size_t len
- )
+   char * dna,
+   size_t pos,
+   size_t len
+)
 {
    // Allocate output.
    char * seq = malloc(len+1);
@@ -749,7 +749,7 @@ pack_fasta
    // Chromosome file.
    wstack_t * seqnames = stack_new(64);
    wstack_t * seqstart = stack_new(64);
-   
+
    // Load fasta file line by line and concatenate.
    while ((rlen = getline(&buffer, &sz, inputf)) != -1) {
       if (buffer[0] == '>') {
@@ -783,13 +783,13 @@ pack_fasta
       exit(EXIT_FAILURE);
    }
 
-   b = write(fd, &(seqnames->pos), sizeof(size_t));
+   exit_on_io_error(write(fd, &(seqnames->pos), sizeof(size_t)));
    for (size_t i = 0; i < seqnames->pos; i++) {
-      b = write(fd, seqstart->ptr[i], sizeof(size_t));
+      exit_on_io_error(write(fd, seqstart->ptr[i], sizeof(size_t)));
       char * seqname = (char *) seqnames->ptr[i];
       size_t slen    = strlen(seqname)+1;
-      b = write(fd, &slen, sizeof(size_t));
-      b = write(fd, seqname, slen);
+      exit_on_io_error(write(fd, &slen, sizeof(size_t)));
+      exit_on_io_error(write(fd, seqname, slen));
       free(seqstart->ptr[i]);
       free(seqnames->ptr[i]);
    }
@@ -851,7 +851,7 @@ stack_new
 {
    size_t base = sizeof(wstack_t);
    size_t extra = max * sizeof(void *);
-   wstack_t * stack = malloc(base + extra);
+   wstack_t * stack = calloc(1, base + extra);
    exit_on_memory_error(stack);
 
    stack->max = max;

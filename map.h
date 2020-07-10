@@ -18,11 +18,11 @@ typedef struct align_t    align_t;
 typedef struct seed_t     seed_t;
 
 struct seed_t {
-         size_t    beg;
-         size_t    end;
-         range_t   range;
-         size_t  * sa;
-         int       aligned;
+   size_t    beg;
+   size_t    end;
+   range_t   range;
+   size_t  * sa;
+   int       aligned;
 };
 
 struct aln_t {

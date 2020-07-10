@@ -83,7 +83,7 @@ char* HELP_MSG =
   "  -e: sequencing error rate (default: 0.01)\n"
   "  -t: number of threads (default: 1)\n"
   "\n";
-   
+
 
 double digamma(double);
 double trigamma(double);
@@ -111,7 +111,7 @@ build_index
    fprintf(stderr, "packing sequence... ");
    pack_fasta(fname);
    fprintf(stderr, "done.\n");
-   
+
    // Compute bwt using bwt_gen
    fprintf(stderr, "computing bwt...\n");
    sprintf(fn, "%s.dna", fname);
@@ -129,7 +129,7 @@ build_index
    fprintf(stderr, "computing sampled SA with bw search...\n");
    bwt2sa(fname);
    fprintf(stderr, "\rdone.     \n");
-   
+
    // Load OCC
    sprintf(fn, "%s.occ", fname);
    int focc = open(fn, O_RDONLY);
@@ -187,7 +187,7 @@ load_index
    exit_error(dna == NULL);
    close(fdna);
 
-   
+
    sprintf(buff, "%s.sa", fname);
    int fsar = open(buff, O_RDONLY);
    if (fsar < 0) exit_cannot_open(buff);
@@ -386,7 +386,7 @@ quality_low
   }
   return 0./0.; // Oops...
 }
-    
+
 
 //seedp_t
 double
@@ -425,7 +425,7 @@ quality
       // and for pine this is 25x less. So this value is actually
       // genome-dependent. One way to get to it would just be to
       // count the proportion of reads that go to the super category
-      // and plug the value in the formula. But we would need to 
+      // and plug the value in the formula. But we would need to
       // buffer the first ~10,000 reads to get to this estimate.
       // Those are the "super reads".
       const int mm = 1 + tot/2;
@@ -499,12 +499,12 @@ quality
             // the order mutation, error, compensated error, plus
             // 84 possibilities in the order error, mutation,
             // compensated error (two times by symmetry).
-            return 0.2 * 2*315*u/3*u*(1-u/3)*pow(1-u,47) / 
+            return 0.2 * 2*315*u/3*u*(1-u/3)*pow(1-u,47) /
                   slen / (slen-1);
          }
          else {
             return mm * 6*pow(11*PROB*u/3 / (1-PROB), mm) *
-                  pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) / 
+                  pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) /
                   slen / (slen-1);
             // 0.1 *mm*11*10*(1-p)*u * p*(1-u/3) * (11*pu/3)^{mm-1} *
             // (1-u)^k-mm-1 * (1-p)^k-mm-1 / k*(k-1)/2*p^2*(1-p)^k-2
@@ -522,7 +522,7 @@ quality
    uN0_t uN0_hit = estimate_N0(L1, L2, idx, u);
    if (uN0_hit.N0 * uN0_hit.p0 > N0 * p0) {
       N0 = uN0_hit.N0;
-      p0 = uN0_hit.p0; 
+      p0 = uN0_hit.p0;
    }
 
    if (yes_max_evidence_N_is_0) {
@@ -594,16 +594,14 @@ parse_read
   size_t n = 0;
   ssize_t len = 0;
   read_t * read = calloc(1, sizeof(read_t));
-  if (read == NULL) {
-     fprintf(stderr, "memory error\n");
-     return -1;
-  }
+  exit_error(read == NULL);
+
   if (format == fasta) {
     // Read 2 lines.
     //name
     len = getline(&(read->name), &n, inputf);
     if (len == -1) {
-       goto exit_end_of_file;
+       goto end_of_file_return;
     }
     if (read->name[len-1] == '\n') read->name[len-1] = 0;
 
@@ -611,21 +609,23 @@ parse_read
     n = 0;
     len = getline(&(read->seq), &n, inputf);
     if (len == -1) {
-       goto exit_file_error;
+       fprintf(stderr, "format error in fasta file\n");
+       goto file_error_return;
     }
     if (read->seq[len-1] == '\n') read->seq[len-1] = 0;
 
     //no quality
     read->phred = strdup("*");
-    
+
     push(read, stack);
     return 1;
   }
+
   if (format == fastq) {
     // name
     len = getline(&(read->name), &n, inputf);
     if (len == -1) {
-       goto exit_end_of_file;
+       goto end_of_file_return;
     }
     strtok(read->name, " \t\n");
 
@@ -633,37 +633,46 @@ parse_read
     n = 0;
     len = getline(&(read->seq), &n, inputf);
     if (len == -1) {
-       goto exit_file_error;
+       fprintf(stderr, "format error in fastq file\n");
+       goto file_error_return;
     }
     strtok(read->seq, "\n");
-    
+
     // + (skip line)
-    if(fscanf(inputf, "%*[^\n]\n") < 0) {
-       goto exit_file_error;
+    if (fscanf(inputf, "%*[^\n]\n") < 0) {
+       fprintf(stderr, "format error in fastq file\n");
+       goto file_error_return;
     }
-    
+
     // phred
     n = 0;
     len = getline(&(read->phred), &n, inputf);
     if (len == -1) {
-       goto exit_file_error;
+       fprintf(stderr, "format error in fastq file\n");
+       goto file_error_return;
     }
     strtok(read->phred, "\n");
 
     push(read, stack);
     return 1;
+
   }
 
   // Wrong format.
+  free(read);
   return -1;
 
-exit_end_of_file:
+end_of_file_return:
   free(read->name);
+  free(read->seq);
+  free(read->phred);
   free(read);
   return 0;
 
-exit_file_error:
+file_error_return:
   free(read->name);
+  free(read->seq);
+  free(read->phred);
   free(read);
   return -1;
 
@@ -743,11 +752,17 @@ batch_map
             longest_mem = filter_longest_mem(seeds);
          }
 
-         alnstack_t * alnstack = mapread(seeds, read->seq, idx, rlen, batch->lineid + i);
+         alnstack_t * alst = mapread(
+            seeds,
+            read->seq,
+            idx,
+            rlen,
+            batch->lineid + i
+         );
 
          // Did not find anything.
          // TODO: use skip seeds in this case.
-         if (alnstack->pos == 0) {
+         if (alst->pos == 0) {
             int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
                   read->name+1, read->seq, read->phred);
             outstr = malloc(olen+1);
@@ -755,54 +770,74 @@ batch_map
             sprintf(outstr, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
                   read->name+1, read->seq, read->phred);
             batch->output->ptr[batch->output->pos++] = outstr;
-            free(alnstack);
+            free(alst);
             // Output in sam format.
-            // Free seeds
+            // Free seeds.
             for (size_t i = 0; i < seeds->pos; i++) {
                seed_t * s = (seed_t *) seeds->ptr[i];
                free(s->sa);
                free(s);
             }
             free(seeds);
+            // Free read.
+            free(read->name);
+            free(read->seq);
+            free(read->phred);
+            free(read);
             continue;
          }
 
          // Pick a top alignment at "random".
-         aln_t a = alnstack->aln[(batch->lineid + i) % alnstack->pos];
+         aln_t a = alst->aln[(batch->lineid + i) % alst->pos];
 
-         if (alnstack->pos == 1) {
+         if (alst->pos == 1) {
             a.qual = uN0.N0 > QUICK_DUPLICATES ?
                quality_low(rlen, longest_mem, uN0) :
                quality(a, read->seq, idx, uN0, batch->mutex_sesame);
          }
          else {
-            a.qual = 1-1./alnstack->pos;
+            a.qual = 1-1./alst->pos;
          }
 
-         // If the results are so-so, use skip seeds to see if we
-         // can find something better.
-         if (alnstack->pos == 1 && a.qual > .001 && a.qual < .03 && longest_mem == NULL) {
-            wstack_t * skipseeds = skip_seeds(read->seq, idx, GAMMA, 8);
-            if (skipseeds->pos > 0) {
-               alnstack_t * skipalnstack = remap_with_skip_seeds(skipseeds, alnstack, read->seq, idx, a.score, batch->lineid + i);
-               if (skipalnstack->pos > 0) {
-                  for(size_t i = 0; i < skipalnstack->pos; i++) {
-                     aln_t skipa = alnstack->aln[i];
-                     if (skipa.score < a.score)
-                        fprintf(stdout, ">>>skip seeds found a better hit with score: %d\n", skipa.score);
-                     free(skipalnstack->aln[i].refseq);
-                  }
-               }
-               free(skipalnstack);
-            }
-            // Free seeds.
-            for (size_t i = 0 ; i < skipseeds->pos ; i++) {
-               seed_t * s = (seed_t *) skipseeds->ptr[i];
-               free(s->sa);
-               free(s);
-            }
-            free(skipseeds);
-         }
+        // If the results are so-so, use skip seeds to see if we
+        // can find something better.
+        int lo_mapq = a.qual > .001;
+        int hi_err = a.score > 1;
+        int lo_N = longest_mem == NULL;
+        int no_tie = alst->pos == 1;
+        if (lo_mapq && hi_err && lo_N && no_tie) {
+           // Run skip-9 seeding of minimum size 19. This scheme has a
+           // ~1% chance of not finding the target on reads of 50 nt.
+           // In addition, it allows us to ascertain that 50 nt reads
+           // have at least two errors if they have only one seed.
+           wstack_t * skipseeds = skip_seeds(read->seq, idx, 19, 9);
+           if (skipseeds->pos > 0) {
+              alnstack_t * salst = remap_with_skip_seeds(
+                  skipseeds,
+                  alst,  // Contains loci aligned with MEMS.
+                  read->seq,
+                  idx,
+                  a.score,
+                  batch->lineid + i
+              );
+              if (salst->pos > 0) {
+                 // Found a better hit.
+                 for (size_t i = 0 ; i < salst->pos ; i++) {
+                    aln_t skipa = salst->aln[i];
+                    fprintf(stdout, ">>Better score: %d\n", skipa.score);
+                    free(salst->aln[i].refseq);
+                 }
+              }
+              free(salst);
+           }
+           // Free seeds.
+           for (size_t i = 0 ; i < skipseeds->pos ; i++) {
+              seed_t * s = (seed_t *) skipseeds->ptr[i];
+              free(s->sa);
+              free(s);
+           }
+           free(skipseeds);
+        }
 
          // Report mapping results
          pos_t pos = get_pos(a.refpos, idx.chr);
@@ -829,9 +864,8 @@ batch_map
          free(seeds);
 
          // Free alignments
-         for(size_t i = 0; i < alnstack->pos; i++)
-            free(alnstack->aln[i].refseq);
-         free(alnstack);
+         for(size_t i = 0; i < alst->pos; i++) free(alst->aln[i].refseq);
+         free(alst);
 
          // Free read
          free(read->name);
@@ -897,8 +931,8 @@ void * arg
 void
 mt_read
 (
-const char * indexfname,
-const char * readsfname
+   const char * indexfname,
+   const char * readsfname
 )
 {
    size_t maxlen = 0; // Max 'k' value for seeding probabilities.
@@ -946,7 +980,7 @@ const char * readsfname
    batch_t ** batch = malloc(2*MAXTHREADS*sizeof(batch_t));
    exit_error(batch == NULL || worker == NULL);
 
-   // Allocate and fill static batch info   
+   // Allocate and fill static batch info
    for (int i = 0; i < 2*MAXTHREADS; i++) {
       // Alloc batch
       batch[i] = malloc(sizeof(batch_t));
@@ -1145,6 +1179,7 @@ char ** argv
       }
 
       mt_read(index_path, reads_path);
+
    }
 }
 
