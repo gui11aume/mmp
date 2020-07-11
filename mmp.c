@@ -583,6 +583,20 @@ print_sam_header
 }
 
 
+void
+remove_N
+(
+   char * seq
+)
+{
+   const char DNA[4] = "gatc";
+   static int c = 0;
+   for (char * p = strchr(seq, 'N') ; p != NULL ; p = strchr(p, 'N')) {
+      *p = DNA[c++ % 4];
+   }
+}
+
+
 int
 parse_read
 (
@@ -603,7 +617,8 @@ parse_read
     if (len == -1) {
        goto end_of_file_return;
     }
-    if (read->name[len-1] == '\n') read->name[len-1] = 0;
+    // Replace empty space by '\0'.
+    strtok(read->name, " \t\n");
 
     //seq
     n = 0;
@@ -613,6 +628,9 @@ parse_read
        goto file_error_return;
     }
     if (read->seq[len-1] == '\n') read->seq[len-1] = 0;
+    // Replace new line by '\0'.
+    strtok(read->seq, "\n");
+    remove_N(read->seq);
 
     //no quality
     read->phred = strdup("*");
@@ -627,6 +645,7 @@ parse_read
     if (len == -1) {
        goto end_of_file_return;
     }
+    // Replace empty space by '\0'.
     strtok(read->name, " \t\n");
 
     // seq
@@ -636,7 +655,9 @@ parse_read
        fprintf(stderr, "format error in fastq file\n");
        goto file_error_return;
     }
+    // Replace new line by '\0'.
     strtok(read->seq, "\n");
+    remove_N(read->seq);
 
     // + (skip line)
     if (fscanf(inputf, "%*[^\n]\n") < 0) {
@@ -651,6 +672,7 @@ parse_read
        fprintf(stderr, "format error in fastq file\n");
        goto file_error_return;
     }
+    // Replace new line by '\0'.
     strtok(read->phred, "\n");
 
     push(read, stack);
@@ -719,6 +741,9 @@ batch_map
 
          read_t * read = (read_t *)batch->reads->ptr[i];
          size_t rlen = strlen(read->seq);
+
+         // DEBUG //
+         fprintf(stderr, "%s\n", read->seq);
 
          // Compute L1, L2 and MEMs.
          seed_t L1, L2;
