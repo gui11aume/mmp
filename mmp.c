@@ -743,7 +743,7 @@ batch_map
          size_t rlen = strlen(read->seq);
 
          // DEBUG //
-         fprintf(stderr, "%s\n", read->seq);
+         // fprintf(stderr, "%s\n", read->seq);
 
          // Compute L1, L2 and MEMs.
          seed_t L1, L2;
@@ -778,12 +778,12 @@ batch_map
          }
 
          alnstack_t * alst = mapread(
-            seeds,
-            read->seq,
-            idx,
-            rlen,
-            batch->lineid + i
-         );
+               seeds,
+               read->seq,
+               idx,
+               rlen,
+               batch->lineid + i
+               );
 
          // Did not find anything.
          // TODO: use skip seeds in this case.
@@ -824,45 +824,58 @@ batch_map
             a.qual = 1-1./alst->pos;
          }
 
-        // If the results are so-so, use skip seeds to see if we
-        // can find something better.
-        int lo_mapq = a.qual > .001;
-        int hi_err = a.score > 1;
-        int lo_N = longest_mem == NULL;
-        int no_tie = alst->pos == 1;
-        if (lo_mapq && hi_err && lo_N && no_tie) {
-           // Run skip-9 seeding of minimum size 19. This scheme has a
-           // ~1% chance of not finding the target on reads of 50 nt.
-           // In addition, it allows us to ascertain that 50 nt reads
-           // have at least two errors if they have only one seed.
-           wstack_t * skipseeds = skip_seeds(read->seq, idx, 19, 9);
-           if (skipseeds->pos > 0) {
-              alnstack_t * salst = remap_with_skip_seeds(
-                  skipseeds,
-                  alst,  // Contains loci aligned with MEMS.
-                  read->seq,
-                  idx,
-                  a.score,
-                  batch->lineid + i
-              );
-              if (salst->pos > 0) {
-                 // Found a better hit.
-                 for (size_t i = 0 ; i < salst->pos ; i++) {
-                    aln_t skipa = salst->aln[i];
-                    fprintf(stdout, ">>Better score: %d\n", skipa.score);
-                    free(salst->aln[i].refseq);
-                 }
-              }
-              free(salst);
-           }
-           // Free seeds.
-           for (size_t i = 0 ; i < skipseeds->pos ; i++) {
-              seed_t * s = (seed_t *) skipseeds->ptr[i];
-              free(s->sa);
-              free(s);
-           }
-           free(skipseeds);
-        }
+         double refqual = a.qual;
+
+         // If the results are so-so, use skip seeds to see if we
+         // can find something better.
+         int lo_mapq = a.qual > .001;
+         int hi_err = a.score > 1;
+         int lo_N = longest_mem == NULL;
+         int no_tie = alst->pos == 1;
+         if (lo_mapq && hi_err && lo_N && no_tie) {
+            // Run skip-7 seeding of minimum size 17. This scheme
+            // allows us to ascertain that 50 nt reads have at least
+            // two errors if they have only one seed.
+            wstack_t * skipseeds = skip_seeds(read->seq, idx, 17, 7);
+            if (skipseeds->pos > 0) {
+               alnstack_t * salst = remap_with_skip_seeds(
+                     skipseeds,
+                     alst,  // Contains loci aligned with MEMS.
+                     read->seq,
+                     idx,
+                     a.score,
+                     batch->lineid + i);
+               if (salst->pos > 0) {
+                  // Found better hits.
+                  for (size_t i = 0 ; i < salst->pos ; i++) {
+                     aln_t skipa = salst->aln[i];
+                     if (skipa.score >= a.score) {
+                        fprintf(stderr, "this should not happen -- debug");
+                        exit(EXIT_FAILURE);
+                     }
+                  }
+                  // Free previous alignments.
+                  for(size_t i = 0; i < alst->pos; i++) {
+                     free(alst->aln[i].refseq);
+                  }
+                  free(alst);
+                  // Replace with new improved alignments.
+                  alst = salst;
+                  a = alst->aln[(batch->lineid + i) % alst->pos];
+                  a.qual = refqual;
+               }
+               else {
+                  free(salst);
+               }
+            }
+            // Free seeds.
+            for (size_t i = 0 ; i < skipseeds->pos ; i++) {
+               seed_t * s = (seed_t *) skipseeds->ptr[i];
+               free(s->sa);
+               free(s);
+            }
+            free(skipseeds);
+         }
 
          // Report mapping results
          pos_t pos = get_pos(a.refpos, idx.chr);

@@ -251,10 +251,10 @@ merge_overlapping_seeds
    for (int i = 0 ; i < skip_seeds->pos ; i++) {
       seed_t * s = (seed_t *) skip_seeds->ptr[i];
       size_t nloci = s->range.top - s->range.bot + 1;
-      if (nloci > 16) {
+      if (nloci > 32) {
          // Keep at most 16 loci per seed.
-         s->range.top = s->range.bot + 15;
-         nloci = 16;
+         s->range.top = s->range.bot + 31;
+         nloci = 32;
       }
       s->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, s->range);
       // Sort SA values by locus order.
@@ -1085,12 +1085,12 @@ remap_with_skip_seeds
    size_t slen = strlen(seq);
 
    if (DEBUG_VERBOSE) {
-      fprintf(stdout, "\n[REMAPPING]\n");
+      fprintf(stdout, "\n[REMAPPING] searching hits with score < %d\n", max_mismatches);
    }
 
    // Distinguish the MEM-based best score from the new best score.
-   const int init_best_score = min(max_mismatches, MAX_ALIGN_MISMATCHES);
-   int best_score = init_best_score;
+   const int min_score_to_achieve = min(max_mismatches, MAX_ALIGN_MISMATCHES) - 1;
+   int best_score = min_score_to_achieve;
 
    // Allocate new best hits.
    alnstack_t * best = alnstack_new(10);
@@ -1104,8 +1104,8 @@ remap_with_skip_seeds
    // Chain seeds.
 
    // The leftmost seed is a position [1] on reads of 50 nt.
-   const int n_slots = 1 + (slen-19) / 10;
-   const int left_slot = slen-19 - 10 * (n_slots-1);
+   const int n_slots = 1 + (slen-17) / 8;
+   const int left_slot = slen-17 - 8 * (n_slots-1);
 
    // Start with leftmost seed (leftmost in the genome).
    seed_t * old = (seed_t *) merged->ptr[0];
@@ -1113,16 +1113,21 @@ remap_with_skip_seeds
    seed_t * longest = old; // Longest seed of the chain.
 
    // Count minimum number of errors on the left of the seed.
-   // The formula assumes that seeds are spaced by 10 nt.
-   int minscore = (old->beg - left_slot + 10) / 20;
+   // Note: this formula is wrong because the minimum should
+   // be higher, but this is a rare case with the error in
+   // only one position so we take the risk. We'll miss a
+   // few hits but we already did when limiting the number
+   // of loci per seed.
+   int minscore = (old->beg - left_slot + 8) / 16;
    // Calls 'malloc' and 'exit_on_memory_error'.
    wstack_t * chains = stack_new(16);
    for (int i = 1 ; i < merged->pos ; i++) {
       new = (seed_t *) merged->ptr[i];
       if (new->sa[0] - old->sa[0] < slen) {
          // New seed is in the same chain.
-         // The formula assumes that seeds are spaced by 10*k + 2 nt.
-         minscore += (new->beg - old->end + 18) / 20;
+         // The formula assumes that seeds are spaced by 8*k + 8 nt.
+         // Note: this formula is also false, as above.
+         minscore += (new->beg - old->end + 8) / 16;
          if (new->end - new->beg >= longest->end - longest->beg) {
             // New seed is at least as long as old seed: replace.
             longest = new;
@@ -1131,36 +1136,47 @@ remap_with_skip_seeds
       else {
          // New seed is in another chain. Store previous chain.
          // Count minimum number of errors on the right of the seed.
-         // The formula assumes that seeds are spaced by 10 nt.
-         minscore += (slen-1 - old->end + 10) / 20;
+         // Note: this formula is also false, as above.
+         minscore += (slen-1 - old->end + 8) / 16;
          // Use field 'aligned' to store the minimum score of the seed.
          longest->aligned = minscore;
          push(longest, &chains);
-         minscore = (new->beg - left_slot + 10) / 20;
+         minscore = (new->beg - left_slot + 8) / 16;
          longest = new;
       }
       old = new; // Old is the new new.
    }
    // Store last chain.
-   minscore += (slen-1 - new->end + 10) / 20;
+   minscore += (slen-1 - new->end + 8) / 16;
    longest->aligned = minscore;
    push(longest, &chains);
 
    // Align seeds.
    int nseen = 0;
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout, "Number of chains: %ld\n\n", chains->pos);
+   }
    for (size_t i = 0 ; i < chains->pos ; i++) {
       seed_t * seed = (seed_t *) chains->ptr[i];
 
       if (DEBUG_VERBOSE) {
-         fprintf(stdout, "chain[%ld] (main seed) beg: %ld, end: %ld\n",
-               i, seed->beg, seed->end);
+         fprintf(stdout, "chain[%ld] (main seed) beg: %ld, end: %ld, minscore: %d\n",
+               i, seed->beg, seed->end, seed->aligned);
       }
 
       // Check if locus can beat the best hit.
-      if (seed->aligned >= init_best_score) {
+      if (seed->aligned >= min_score_to_achieve) {
          if (DEBUG_VERBOSE) {
             fprintf(stdout, "minscore %d >= previous best: skipping\n--\n",
                   seed->aligned);
+         }
+         continue;
+      }
+
+      if (nseen >= 50) {
+         if (DEBUG_VERBOSE) {
+            fprintf(stdout, "skipping locus %ld (limit exceeded)\n--\n",
+                     seed->sa[0] - seed->beg);
          }
          continue;
       }
@@ -1182,16 +1198,12 @@ remap_with_skip_seeds
          }
          continue;
       }
-      else if (nseen < 50) {
+      else {
          best->seen[nseen++] = indexpos; // Not used in present version.
          if (DEBUG_VERBOSE) {
             fprintf(stdout, "adding locus %ld to alignment list\n--\n",
                   seed->sa[0] - seed->beg);
          }
-      }
-      else if (DEBUG_VERBOSE) {
-         fprintf(stdout, "skipping locus %ld (limit exceeded)\n--\n",
-                  seed->sa[0] - seed->beg);
       }
 
       align_t alignment = (align_t) {
@@ -1259,11 +1271,19 @@ mapread
    alnstack_t * best = alnstack_new(10);
 
    // See if we can compute the score without performing any alignment.
+   seed_t * leftmost = (seed_t *) seeds->ptr[seeds->pos-1];
    seed_t * rightmost = (seed_t *) seeds->ptr[0];
    if (rightmost->end == slen-1) {
       if (rightmost->beg == 0) {
          if (DEBUG_VERBOSE) {
             fprintf(stdout, "MEM seed aligns perfectly: skipping alignment (score 0)\n");
+         }
+         range_t range = rightmost->range;
+         if (range.top > range.bot) {
+            if (DEBUG_VERBOSE) {
+               fprintf(stdout, "Multiple hits:, keeping only %d.", MAX_MINSCORE_REPEATS);
+            }
+            rightmost->range.top = rightmost->range.bot + MAX_MINSCORE_REPEATS - 1;
          }
          rightmost->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, rightmost->range);
          size_t nloci = rightmost->range.top - rightmost->range.bot + 1;
@@ -1291,7 +1311,6 @@ mapread
          // NOTE: we miss the cases where the error is on the flanks of
          // the read, but this case is rare so it would complicate the code
          // with minor speed benefits.
-         seed_t * leftmost = (seed_t *) seeds->ptr[seeds->pos-1];
          if (leftmost->beg == 0 && leftmost->end == rightmost->beg-2) {
             // Need to check if the seeds match contiguous regions.
             rightmost->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, rightmost->range);
@@ -1345,7 +1364,7 @@ mapread
    }
 
    if (DEBUG_VERBOSE) {
-      fprintf(stdout, "MEMs: %ld, alignable: %ld, repeat-minscore: %d\n",
+      fprintf(stdout, "MEMs: %ld, alignable: %ld, repeat-minscore: %d\n\n",
             seeds->pos, n_mem, repeats_minscore);
    }
 
@@ -1357,7 +1376,74 @@ mapread
    // Align seeds from largest to smallest.
    for (size_t i = 0; i < n_mem; i++) {
       seed_t * mem = (seed_t *)seeds->ptr[i];
-      int minscore = (mem->beg > 0) + (mem->end < slen-1);
+//
+//        Leftmost MEM               MEM
+//
+//    |                         =============  ...
+//    |--------------------
+//    Case 1: there are at least two errors on the left of the MEM.
+//    There is an error flanking the MEM. If it were the only one, the
+//    leftmost MEM would be longer so as to abut the error.
+//
+//
+//    |                         =============  ...
+//    |-----------------------------
+//    Case 2a: there is at least one error on the left of the MEM.
+//    There is an error flanking the MEM. We cannot say more.
+//
+//
+//    |                         =============  ...
+//    |-------------------------
+//    Case 2b: there is at least one error on the left of the MEM.
+//
+//
+//    |                         =============  ...
+//    |   -----------------
+//    Case 3: there are at least two errors on the left of the MEM.
+//    The rationale is similar to that of case 1.
+//
+//
+//    |                         =============  ...
+//    |   --------------------------
+//    Case 4a: there are at least two errors on the left of the MEM.
+//    There is an error flanking the MEM. If it were the only one, there
+//    would be a MEM reaching the left end of the read.
+//
+//
+//    |                         =============  ...
+//    |   ----------------------
+//    Case 4b: there are at least two errors on the left of the MEM.
+//
+//
+//    |       ===============================  ...
+//    |   ------------------
+//    Case 4c: there is at least one error on the left of the MEM.
+//    The space on the left is too short to fit a MEM so the rationale
+//    of case 4a does not apply.
+//
+//
+//    |                         =============  ...
+//    |
+//    Case 5: there is at least one error on the left of the MEM.
+//    We could ensure that there are at least two if the space on the
+//    left is greater than 2 * GAMMA but we neglect this case.
+//
+//
+//    |======================================  ...
+//    |
+//    Case 6: there is no error on the left of the MEM.
+
+      int left_minscore =
+         mem == leftmost ?
+            (mem->beg == 0 ? 0 : 1) :                      // Cases 5 and 6.
+               (leftmost->beg > 0 ? 2 :                    // Cases 3 and 4.
+                  (leftmost->end >= mem->beg-1 ? 1 : 2));  // Cases 1 and 1.
+      int right_minscore =
+         mem == rightmost ?
+            (mem->end == slen-1 ? 0 : 1) :                 // Cases 5 and 6.
+               (rightmost->end < slen-1 ? 2 :              // Cases 3 and 4.
+                  (rightmost->beg <= mem->end+1 ? 1 : 2)); // Cases 1 and 1.
+      int minscore = left_minscore + right_minscore;
 
       if (DEBUG_VERBOSE) {
          fprintf(stdout, "MEM[%ld] beg: %ld, end: %ld, span: %ld, minscore: %d, loci: %ld\n",
