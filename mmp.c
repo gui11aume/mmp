@@ -8,7 +8,6 @@
 
 #include "bwt.h"
 #include "map.h"
-#include "sesame.h"
 
 #define GAMMA 19
 #define PROBDEFAULT 0.01
@@ -60,7 +59,6 @@ struct batch_t {
    enum status_t     status;
    int             * act_threads;
    pthread_mutex_t * mutex;
-   pthread_mutex_t * mutex_sesame;
    pthread_cond_t  * cond_reader;
    pthread_cond_t  * cond_writer;
    pthread_cond_t  * cond_reads;
@@ -384,19 +382,21 @@ quality_low
       a = len * PROB * (1 - pow(1 - l/3*pow(1-l, len-1), uN0.N0));
       return a / (1-PROB + a);
   }
-  return 0./0.; // Oops...
+  // Oops... that's weird.
+  fprintf(stderr, "an error has occurred at line %d\n", __LINE__);
+  fprintf(stderr, "please contact guillaume.filion@gmail.com\n");
+  exit(EXIT_FAILURE);
+  return 0./0.;
 }
 
 
-//seedp_t
 double
 quality
 (
          aln_t             aln,
    const char *            seq,  // Read.
          index_t           idx,
-         uN0_t             uN0_read,
-         pthread_mutex_t * mutex
+         uN0_t             uN0_read
 )
 {
 
@@ -535,36 +535,82 @@ quality
 
    if (aln.score == 0) {
      // Special case for perfect alignment score.
-     const double cond = pow(1-PROB, slen);
+     double cond = pow(1-PROB, slen);
      double p1 = slen * PROB * pow(1-PROB, slen-1);
      double p2 = u/3. * pow(1-u, slen-1);
      return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
    }
 
-   pthread_mutex_lock(mutex);
-   double poff = auto_mem_seed_offp(slen, u, N0);
-   pthread_mutex_unlock(mutex);
+   if (aln.score == 1) {
+     // Special case for one error.
+     double cond = slen * PROB * pow(1-PROB, slen-1);
+     // We assume that the read has two errors, and that
+     // one is compensated in a duplicate.
+     double p1 = slen * (slen-1) / 2 * pow(PROB, 2) * pow(1-PROB, slen-2);
+     double p2 = 2 * u/3. * pow(1-u, slen-1);
+     return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
+   }
 
-   // Weight of the evidence if mapping is correct...
-   double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
-   // ... if mapping is on a duplicate...
-   double B = aln.score * log(u) + (slen-aln.score) * log(1-u);
-   // ... and if mapping is random.
-   int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
-      slen - aln.read_end + aln.read_beg - 2 :
-      slen - aln.read_end + aln.read_beg - 3;
-   double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
+   if (aln.score == 2) {
+     // Special case for two errors.
+     double cond = slen * (slen-1) / 2 * pow(PROB, 2) * pow(1-PROB, slen-2);
+     // We assume that the read has three errors, and that
+     // one is compensated in a duplicate.
+     double p1 = slen * (slen-1) * (slen-2) / 6 * pow(PROB, 3) * pow(1-PROB, slen-3);
+     double p2 = 3 * u/3. * pow(1-u, slen-1);
+     return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
+   }
 
-   if (A - B > 1.) A = B + 1.;
+   double logcond = (aln.score) * log(PROB) + (slen - aln.score) * log(1. - PROB) + \
+      lgamma(aln.score + 1) - lgamma(slen - aln.score + 1);
+   double logp1 = (aln.score+1) * log(PROB) + (slen - aln.score-1) * log(1-PROB) + \
+      lgamma(aln.score + 2) - lgamma(slen - aln.score);
+   double p2 = aln.score * u/3. * pow(1-u, slen-1);
+   double term1 = p0 * exp(logp1 - logcond) * (1. - pow(1-p2, N0));
 
-   // Here 'term2' uses non-informative prios instead of Sesame
-   // priors for the sake of simplicity. In practice, 'term2' is
-   // either very close to 0 or very close to 1 and the priors
-   // do not matter.
-   double term1 = prob_p0 * poff / ( poff + exp(A-B)*(1-poff) );
-   double term2 = aln.score < slen / 5 ? 0 : 1. / (1. + exp(A-C));
+   // If the number of errors is high-ish, there is a non-zero
+   // chance that the hit is spurious.
+   double term2 = .0;
+   if (aln.score > slen / 12) {
+      // Number of nucleotides that were actually
+      // aligned (i.e. without the seed).
+      int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
+         slen - aln.read_end + aln.read_beg - 2 :
+         slen - aln.read_end + aln.read_beg - 3;
+      double A = aln.score * log(PROB) + (naln-aln.score) * log(1-PROB);
+      double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
+      // Here 'term2' uses non-informative priors. In practice, 'term2'
+      // is either close to 0 or close to 1 and the priors do not matter.
+      term2 = 1. / (1. + exp(A-C));
+   }
 
    return term1 + term2 > 1. ? 1. : term1 + term2;
+   
+
+//   pthread_mutex_lock(mutex);
+//   double poff = auto_mem_seed_offp(slen, u, N0);
+//   pthread_mutex_unlock(mutex);
+//
+//   // Weight of the evidence if mapping is correct...
+//   double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
+//   // ... if mapping is on a duplicate...
+//   double B = aln.score * log(u) + (slen-aln.score) * log(1-u);
+//   // ... and if mapping is random.
+//   int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
+//      slen - aln.read_end + aln.read_beg - 2 :
+//      slen - aln.read_end + aln.read_beg - 3;
+//   double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
+//
+//   if (A - B > 1.) A = B + 1.;
+//
+//   // Here 'term2' uses non-informative prios instead of Sesame
+//   // priors for the sake of simplicity. In practice, 'term2' is
+//   // either very close to 0 or very close to 1 and the priors
+//   // do not matter.
+//   double term1 = prob_p0 * poff / ( poff + exp(A-B)*(1-poff) );
+//   double term2 = aln.score < slen / 5 ? 0 : 1. / (1. + exp(A-C));
+//
+//   return term1 + term2 > 1. ? 1. : term1 + term2;
 
 }
 
@@ -818,13 +864,11 @@ batch_map
          if (alst->pos == 1) {
             a.qual = uN0.N0 > QUICK_DUPLICATES ?
                quality_low(rlen, longest_mem, uN0) :
-               quality(a, read->seq, idx, uN0, batch->mutex_sesame);
+               quality(a, read->seq, idx, uN0);
          }
          else {
             a.qual = 1-1./alst->pos;
          }
-
-         double refqual = a.qual;
 
          // If the results are so-so, use skip seeds to see if we
          // can find something better.
@@ -862,7 +906,8 @@ batch_map
                   // Replace with new improved alignments.
                   alst = salst;
                   a = alst->aln[(batch->lineid + i) % alst->pos];
-                  a.qual = refqual;
+                  a.qual = alst->pos == 1 ? quality(a, read->seq, idx, uN0) :
+                     1 - 1. / alst->pos;
                }
                else {
                   free(salst);
@@ -973,8 +1018,6 @@ mt_read
    const char * readsfname
 )
 {
-   size_t maxlen = 0; // Max 'k' value for seeding probabilities.
-
    fprintf(stderr, "loading index... ");
    // Load index files.
    index_t idx = load_index(indexfname);
@@ -1006,7 +1049,6 @@ mt_read
 
    // Create mutex and monitors
    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-   pthread_mutex_t mutex_sesame = PTHREAD_MUTEX_INITIALIZER;
    pthread_cond_t  cond_reader  = PTHREAD_COND_INITIALIZER;
    pthread_cond_t  cond_writer  = PTHREAD_COND_INITIALIZER;
    pthread_cond_t  cond_threads = PTHREAD_COND_INITIALIZER;
@@ -1030,7 +1072,6 @@ mt_read
       batch[i]->status       = idle;
       batch[i]->act_threads  = &act_threads;
       batch[i]->mutex        = &mutex;
-      batch[i]->mutex_sesame = &mutex_sesame;
       batch[i]->cond_reader  = &cond_reader;
       batch[i]->cond_writer  = &cond_writer;
       batch[i]->cond_reads   = cond_reads+i;
@@ -1069,15 +1110,6 @@ mt_read
       // Thread is idle, can modify without race conditions
       batch[w]->reads->pos = 0;
       while ((success = parse_read(inputf, format, &(batch[w]->reads)))) {
-         // Set sesame static params
-         size_t rlen = strlen(((read_t *)batch[w]->reads->ptr[batch[w]->reads->pos-1])->seq);
-         if (rlen > maxlen) {
-            maxlen = rlen;
-            pthread_mutex_lock(&mutex_sesame);
-            sesame_set_static_params(GAMMA, maxlen, PROB);
-            pthread_mutex_unlock(&mutex_sesame);
-         }
-
          line++;
          if (batch[w]->reads->pos == batch[w]->reads->max)
             break;
@@ -1143,7 +1175,6 @@ mt_read
    free(cond_reads);
    fclose(inputf);
    free_index_chr(idx.chr);
-   sesame_clean();
 }
 
 

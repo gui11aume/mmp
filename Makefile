@@ -2,7 +2,7 @@ P= mmp
 
 CC= gcc
 CFLAGS= -std=c99 -Wall
-OBJECTS= bwt.o map.o sesame.o QSufSort.o bwt_gen.o
+OBJECTS= bwt.o map.o QSufSort.o bwt_gen.o
 
 # development flags: -DNOQUAL -DFASTOUT
 all: CFLAGS += -DNDEBUG -O3
