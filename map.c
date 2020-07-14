@@ -601,11 +601,13 @@ extend_L1L2
 
    // Preallocate ranges
    range_t newrange = {0};
+   range_t range;
 
    int i;
    size_t merid;
 
-   // L1.
+
+   // L1 is not availble from the pool of MEM seeds.
    L1->end = len-1;
 
    // Look up the beginning (reverse) of the query in lookup table.
@@ -616,7 +618,7 @@ extend_L1L2
       merid = c + (merid << 2);
    }
 
-   range_t range = idx.lut->kmer[merid];
+   range = idx.lut->kmer[merid];
 
    if (range.top < range.bot) {
       range = (range_t) {.bot = 1, .top = idx.occ->txtlen-1};
@@ -640,7 +642,7 @@ extend_L1L2
    L1->beg = i+1;
    L1->range = range;
 
-   // Check L1 result
+   // If ther is a perfect match we are done.
    if (L1->end - L1->beg + 1 == len) {
       L2->beg   = L1->beg;
       L2->end   = L1->end;
@@ -1104,8 +1106,8 @@ remap_with_skip_seeds
    // Chain seeds.
 
    // The leftmost seed is a position [1] on reads of 50 nt.
-   const int n_slots = 1 + (slen-17) / 8;
-   const int left_slot = slen-17 - 8 * (n_slots-1);
+   const int n_slots = 1 + (slen-16) / 8;
+   const int left_slot = slen-16 - 8 * (n_slots-1);
 
    // Start with leftmost seed (leftmost in the genome).
    seed_t * old = (seed_t *) merged->ptr[0];
@@ -1113,11 +1115,6 @@ remap_with_skip_seeds
    seed_t * longest = old; // Longest seed of the chain.
 
    // Count minimum number of errors on the left of the seed.
-   // Note: this formula is wrong because the minimum should
-   // be higher, but this is a rare case with the error in
-   // only one position so we take the risk. We'll miss a
-   // few hits but we already did when limiting the number
-   // of loci per seed.
    int minscore = (old->beg - left_slot + 8) / 16;
    // Calls 'malloc' and 'exit_on_memory_error'.
    wstack_t * chains = stack_new(16);
@@ -1126,7 +1123,6 @@ remap_with_skip_seeds
       if (new->sa[0] - old->sa[0] < slen) {
          // New seed is in the same chain.
          // The formula assumes that seeds are spaced by 8*k + 8 nt.
-         // Note: this formula is also false, as above.
          minscore += (new->beg - old->end + 8) / 16;
          if (new->end - new->beg >= longest->end - longest->beg) {
             // New seed is at least as long as old seed: replace.
@@ -1136,7 +1132,6 @@ remap_with_skip_seeds
       else {
          // New seed is in another chain. Store previous chain.
          // Count minimum number of errors on the right of the seed.
-         // Note: this formula is also false, as above.
          minscore += (slen-1 - old->end + 8) / 16;
          // Use field 'aligned' to store the minimum score of the seed.
          longest->aligned = minscore;
@@ -1150,6 +1145,9 @@ remap_with_skip_seeds
    minscore += (slen-1 - new->end + 8) / 16;
    longest->aligned = minscore;
    push(longest, &chains);
+
+   // Sort chains by length.
+   qsort(chains->ptr, chains->pos, sizeof(seed_t *), mem_by_span);
 
    // Align seeds.
    int nseen = 0;
@@ -1186,9 +1184,9 @@ remap_with_skip_seeds
       int skip_alignment = 0;
       // Run through MEM-based alignments.
       for (int j = 0 ; j < 50 && skip_alignment == 0; j++) {
-         if (mem_alst->seen[j] == 0)
+         if (mem_alst != NULL && mem_alst->seen[j] == 0)
             break;
-         if (indexpos == mem_alst->seen[j])
+         if (mem_alst != NULL && indexpos == mem_alst->seen[j])
             skip_alignment = 1;
       }
       if (skip_alignment) {

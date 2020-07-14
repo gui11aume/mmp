@@ -406,19 +406,19 @@ quality
    assert(slen >= GAMMA);
 
    int tot = (slen/10) - 2;
-   int yes_max_evidence_N_is_0 = 1;
+   int max_evidence_N_is_0_YES = 1;
    double prob_p0 = .5;
 
    for (int s = 0 ; s <= slen-20 ; s += 10) {
       int unique = test_20mer_uniqueness(aln.refseq + s, idx);
       if (!unique) {
-        yes_max_evidence_N_is_0 = 0;
+        max_evidence_N_is_0_YES = 0;
         break;
       }
       prob_p0 *= .29; // = .94^20
    }
 
-   if (yes_max_evidence_N_is_0 && slen >= 30) {
+   if (max_evidence_N_is_0_YES && slen >= 30) {
       // NB: for the super reads, we assume a frequency of 10%
       // in the genome. For Drosophila this is much more, for
       // human this is approximately half the value of Drosophila
@@ -525,7 +525,7 @@ quality
       p0 = uN0_hit.p0;
    }
 
-   if (yes_max_evidence_N_is_0) {
+   if (max_evidence_N_is_0_YES) {
      N0 = 1;
      prob_p0 = (prob_p0 + p0) / 2;
    }
@@ -642,6 +642,18 @@ remove_N
    }
 }
 
+void
+free_read
+(
+   read_t * read
+)
+{
+   free(read->name);
+   free(read->seq);
+   free(read->phred);
+   free(read);
+}
+
 
 int
 parse_read
@@ -731,20 +743,30 @@ parse_read
   return -1;
 
 end_of_file_return:
-  free(read->name);
-  free(read->seq);
-  free(read->phred);
-  free(read);
+  free_read(read);
   return 0;
 
 file_error_return:
-  free(read->name);
-  free(read->seq);
-  free(read->phred);
-  free(read);
+  free_read(read);
   return -1;
 
 }
+
+
+void
+free_seeds
+(
+   wstack_t * seeds
+)
+{
+   for (size_t i = 0; i < seeds->pos; i++) {
+      seed_t * s = (seed_t *) seeds->ptr[i];
+      free(s->sa);
+      free(s);
+   }
+   free(seeds);
+}
+
 
 void *
 batch_map
@@ -788,173 +810,156 @@ batch_map
          read_t * read = (read_t *)batch->reads->ptr[i];
          size_t rlen = strlen(read->seq);
 
-         // DEBUG //
-         // fprintf(stderr, "%s\n", read->seq);
-
-         // Compute L1, L2 and MEMs.
-         seed_t L1, L2;
-         extend_L1L2(read->seq, rlen, idx, &L1, &L2);
-
          // Compute seeds.
-         wstack_t * seeds = mem_seeds(read->seq, idx, GAMMA);
+         wstack_t * memseeds = mem_seeds(read->seq, idx, GAMMA);
 
-         // Return if no seeds were found
-         if (seeds->pos == 0) {
-            // Did not find anything.
-            free(seeds);
-            // Output in sam format.
-            int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-                  read->name+1, read->seq, read->phred);
-            outstr = malloc(olen+1);
-            exit_error(outstr == NULL);
-            sprintf(outstr, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-                  read->name+1, read->seq, read->phred);
-            batch->output->ptr[batch->output->pos++] = outstr;
-            continue;
-         }
+         // Need to remap if we found no seed.
+         int need_to_remap_YES = memseeds->pos == 0;
 
-         // Compute N(L1,L2)
-         const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
-         uN0_t uN0 = estimate_N0(L1, L2, idx, lambda);
+         // Data for the best alignment.
+         aln_t besta = {0};
 
-         // Quick mode: only align longest MEMs
-         seed_t *longest_mem = NULL;
-         if (uN0.N0 > QUICK_DUPLICATES) {
-            longest_mem = filter_longest_mem(seeds);
-         }
+         // Data for number of duplicates.
+         uN0_t uN0 = {0};
 
-         alnstack_t * alst = mapread(
-               seeds,
-               read->seq,
-               idx,
-               rlen,
-               batch->lineid + i
-               );
+         // Keep the longest MEM for quick mapping.
+         seed_t * longest_mem = NULL;
 
-         // Did not find anything.
-         // TODO: use skip seeds in this case.
-         if (alst->pos == 0) {
-            int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-                  read->name+1, read->seq, read->phred);
-            outstr = malloc(olen+1);
-            exit_error(outstr == NULL);
-            sprintf(outstr, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
-                  read->name+1, read->seq, read->phred);
-            batch->output->ptr[batch->output->pos++] = outstr;
-            free(alst);
-            // Output in sam format.
-            // Free seeds.
-            for (size_t i = 0; i < seeds->pos; i++) {
-               seed_t * s = (seed_t *) seeds->ptr[i];
-               free(s->sa);
-               free(s);
+         // Working alignment stack.
+         alnstack_t * alst = NULL;
+
+         if (!need_to_remap_YES) {
+            seed_t L1, L2;
+            // Proceed to L1 and L2 extension on the read.
+            extend_L1L2(read->seq, rlen, idx, &L1, &L2);
+
+            // Compute N (number of duplicates).
+            const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
+            uN0 = estimate_N0(L1, L2, idx, lambda);
+
+            // Quick mode: only align longest MEMs
+            if (uN0.N0 > QUICK_DUPLICATES) {
+               longest_mem = filter_longest_mem(memseeds);
             }
-            free(seeds);
-            // Free read.
-            free(read->name);
-            free(read->seq);
-            free(read->phred);
-            free(read);
-            continue;
+
+            alst = mapread(
+                  memseeds,
+                  read->seq,
+                  idx,
+                  rlen,
+                  batch->lineid + i
+            );
+
+            if (alst->pos == 0) {
+               // Did not find any hit: need to remap.
+               need_to_remap_YES = 1;
+            }
+            else {
+               // Pick a best hit at "random".
+               besta = alst->aln[(batch->lineid + i) % alst->pos];
+               // It is very unlikely that the true hit has
+               // 6+ error for a read of size 50 nt (7+ for a
+               // read of size 75, 8+ for a read of 100 nt etc.).
+               if (besta.score >= 4 + rlen / 25) {
+                  if (uN0.N0 > QUICK_DUPLICATES) {
+                     // Do not remap reads with many duplicates.
+                     need_to_remap_YES = 0;
+                  }
+                  else {
+                     need_to_remap_YES = 1;
+                  }
+               }
+            }
          }
 
-         // Pick a top alignment at "random".
-         aln_t a = alst->aln[(batch->lineid + i) % alst->pos];
+         int found_no_hit_YES = 0;
 
-         if (alst->pos == 1) {
-            a.qual = uN0.N0 > QUICK_DUPLICATES ?
-               quality_low(rlen, longest_mem, uN0) :
-               quality(a, read->seq, idx, uN0);
-         }
-         else {
-            a.qual = 1-1./alst->pos;
-         }
-
-         // If the results are so-so, use skip seeds to see if we
-         // can find something better.
-         int lo_mapq = a.qual > .001;
-         int hi_err = a.score > 1;
-         int lo_N = longest_mem == NULL;
-         int no_tie = alst->pos == 1;
-         if (lo_mapq && hi_err && lo_N && no_tie) {
-            // Run skip-7 seeding of minimum size 17. This scheme
-            // allows us to ascertain that 50 nt reads have at least
-            // two errors if they have only one seed.
-            wstack_t * skipseeds = skip_seeds(read->seq, idx, 17, 7);
-            if (skipseeds->pos > 0) {
+         if (need_to_remap_YES) {
+            // Run skip-7 seeding of minimum size 16.
+            wstack_t * skipseeds = skip_seeds(read->seq, idx, 16, 7);
+            if (skipseeds->pos == 0) {
+               found_no_hit_YES = 1;
+            }
+            else {
+               // Try aligning with new seeds.
                alnstack_t * salst = remap_with_skip_seeds(
                      skipseeds,
                      alst,  // Contains loci aligned with MEMS.
                      read->seq,
                      idx,
-                     a.score,
+                     besta.score > 0 ? besta.score : rlen-16,
                      batch->lineid + i);
                if (salst->pos > 0) {
-                  // Found better hits.
-                  for (size_t i = 0 ; i < salst->pos ; i++) {
-                     aln_t skipa = salst->aln[i];
-                     if (skipa.score >= a.score) {
-                        fprintf(stderr, "this should not happen -- debug");
-                        exit(EXIT_FAILURE);
+                  // Free previous alignments, if any.
+                  if (alst != NULL) {
+                     for(size_t i = 0 ; i < alst->pos; i++) {
+                        free(alst->aln[i].refseq);
                      }
+                     free(alst);
                   }
-                  // Free previous alignments.
-                  for(size_t i = 0; i < alst->pos; i++) {
-                     free(alst->aln[i].refseq);
-                  }
-                  free(alst);
                   // Replace with new improved alignments.
                   alst = salst;
-                  a = alst->aln[(batch->lineid + i) % alst->pos];
-                  a.qual = alst->pos == 1 ? quality(a, read->seq, idx, uN0) :
-                     1 - 1. / alst->pos;
+                  besta = alst->aln[(batch->lineid + i) % alst->pos];
                }
                else {
+                  // Found no hit with skip seeds.
+                  found_no_hit_YES = 1;
                   free(salst);
                }
+               // We won't need skip seeds anymore.
+               free_seeds(skipseeds);
             }
-            // Free seeds.
-            for (size_t i = 0 ; i < skipseeds->pos ; i++) {
-               seed_t * s = (seed_t *) skipseeds->ptr[i];
-               free(s->sa);
-               free(s);
-            }
-            free(skipseeds);
          }
 
+         if (found_no_hit_YES) {
+            // Found nothing...
+            int olen = snprintf(NULL, 0, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+                  read->name+1, read->seq, read->phred);
+            outstr = malloc(olen+1);
+            exit_error(outstr == NULL);
+            // Output in sam format.
+            sprintf(outstr, "%s\t4\t*\t0\t0\t*\t*\t0\t0\t%s\t%s\n",
+                  read->name+1, read->seq, read->phred);
+            batch->output->ptr[batch->output->pos++] = outstr;
+            free(alst);
+            free_seeds(memseeds);
+            free_read(read);
+            continue;
+         }
+
+         // Compute mapping quality of the best hit.
+         if (alst->pos == 1) {
+            besta.qual = uN0.N0 > QUICK_DUPLICATES ?
+               quality_low(rlen, longest_mem, uN0) :
+               quality(besta, read->seq, idx, uN0);
+         }
+         else {
+            besta.qual = 1-1./alst->pos;
+         }
+
+
          // Report mapping results
-         pos_t pos = get_pos(a.refpos, idx.chr);
+         pos_t pos = get_pos(besta.refpos, idx.chr);
          // Output in sam format.
          int bits = pos.strand ? 0 : 16;
          size_t leftpos = pos.strand ? pos.pos : pos.pos - rlen+1;
          int olen = snprintf(NULL, 0, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-               read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
-               rlen, read->seq, read->phred, a.score);
+               read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(besta.qual)),
+               rlen, read->seq, read->phred, besta.score);
 
          outstr = malloc(olen+1);
          exit_error(outstr == NULL);
          sprintf(outstr, "%s\t%d\t%s\t%ld\t%d\t%ldM\t*\t0\t0\t%s\t%s\tXS:i:%d\n",
-               read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(a.qual)),
-               rlen, read->seq, read->phred, a.score);
+               read->name+1, bits, pos.rname, leftpos, (int) (-10*log10(besta.qual)),
+               rlen, read->seq, read->phred, besta.score);
          batch->output->ptr[batch->output->pos++] = outstr;
 
-         // Free seeds
-         for (size_t i = 0; i < seeds->pos; i++) {
-            seed_t * s = (seed_t *) seeds->ptr[i];
-            free(s->sa);
-            free(s);
-         }
-         free(seeds);
+         free_seeds(memseeds);
 
          // Free alignments
          for(size_t i = 0; i < alst->pos; i++) free(alst->aln[i].refseq);
          free(alst);
-
-         // Free read
-         free(read->name);
-         free(read->seq);
-         free(read->phred);
-         free(read);
+         free_read(read);
       }
 
       // Decrease active threads
