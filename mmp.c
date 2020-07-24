@@ -533,40 +533,31 @@ quality
      prob_p0 = p0;
    }
 
-   if (aln.score == 0) {
-     // Special case for perfect alignment score.
-     double cond = pow(1-PROB, slen);
-     double p1 = slen * PROB * pow(1-PROB, slen-1);
-     double p2 = u/3. * pow(1-u, slen-1);
-     return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
-   }
+   // XXX Keep only for comparison (to debug). XXX //
+//   if (aln.score == 0) {
+//     // Special case for perfect alignment score.
+//     double cond = pow(1-PROB, slen);
+//     double p1 = slen * PROB * pow(1-PROB, slen-1);
+//     double p2 = u/3. * pow(1-u, slen-1);
+//     return prob_p0 * p1 * (1. - pow(1-p2, N0)) / cond;
+//   }
+//
+//   if (aln.score == 1) {
+//     // Special case for one error.
+//     double cond = slen * PROB * pow(1-PROB, slen-1);
+//     // We assume that the read has two errors, and that
+//     // one is compensated in a duplicate.
+//     double p1 = slen * (slen-1) / 2 * pow(PROB, 2) * pow(1-PROB, slen-2);
+//     double p2 = 2 * u/3. * pow(1-u, slen-1);
+//     return prob_p0 * p1 * (1. - pow(1-p2, N0)) / cond;
+//   }
 
-   if (aln.score == 1) {
-     // Special case for one error.
-     double cond = slen * PROB * pow(1-PROB, slen-1);
-     // We assume that the read has two errors, and that
-     // one is compensated in a duplicate.
-     double p1 = slen * (slen-1) / 2 * pow(PROB, 2) * pow(1-PROB, slen-2);
-     double p2 = 2 * u/3. * pow(1-u, slen-1);
-     return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
-   }
-
-   if (aln.score == 2) {
-     // Special case for two errors.
-     double cond = slen * (slen-1) / 2 * pow(PROB, 2) * pow(1-PROB, slen-2);
-     // We assume that the read has three errors, and that
-     // one is compensated in a duplicate.
-     double p1 = slen * (slen-1) * (slen-2) / 6 * pow(PROB, 3) * pow(1-PROB, slen-3);
-     double p2 = 3 * u/3. * pow(1-u, slen-1);
-     return p0 * p1 * (1. - pow(1-p2, N0)) / cond;
-   }
-
-   double logcond = (aln.score) * log(PROB) + (slen - aln.score) * log(1. - PROB) + \
+   double logcond = (aln.score) * log(PROB) + (slen - aln.score) * log(1. - PROB) - \
       lgamma(aln.score + 1) - lgamma(slen - aln.score + 1);
-   double logp1 = (aln.score+1) * log(PROB) + (slen - aln.score-1) * log(1-PROB) + \
+   double logp1 = (aln.score+1) * log(PROB) + (slen - aln.score-1) * log(1-PROB) - \
       lgamma(aln.score + 2) - lgamma(slen - aln.score);
-   double p2 = aln.score * u/3. * pow(1-u, slen-1);
-   double term1 = p0 * exp(logp1 - logcond) * (1. - pow(1-p2, N0));
+   double p2 = (aln.score + 1) * u/3. * pow(1-u, slen-1);
+   double term1 = prob_p0 * exp(logp1 - logcond) * (1. - pow(1-p2, N0));
 
    // If the number of errors is high-ish, there is a non-zero
    // chance that the hit is spurious.
@@ -811,7 +802,8 @@ batch_map
          size_t rlen = strlen(read->seq);
 
          // Compute seeds.
-         wstack_t * memseeds = mem_seeds(read->seq, idx, GAMMA);
+         seed_t rescue = {0};
+         wstack_t * memseeds = mem_seeds(read->seq, idx, GAMMA, &rescue);
 
          // Need to remap if we found no seed.
          int need_to_remap_YES = memseeds->pos == 0;
@@ -847,8 +839,7 @@ batch_map
                   read->seq,
                   idx,
                   rlen,
-                  batch->lineid + i
-            );
+                  batch->lineid + i);
 
             if (alst->pos == 0) {
                // Did not find any hit: need to remap.
@@ -872,6 +863,32 @@ batch_map
             }
          }
 
+         if (need_to_remap_YES || (besta.score > 1 && uN0.N0 < QUICK_DUPLICATES)) {
+            alnstack_t * ralst = map_rescue_seed(
+                  &rescue,
+                  alst,
+                  read->seq,
+                  idx,
+                  besta.score > 0 ? besta.score : rlen-16);
+            if (ralst->pos > 0 && ralst->aln[0].score < besta.score) {
+               need_to_remap_YES = 0;
+               // Free previous alignments, if any.
+               if (alst != NULL) {
+                  for(size_t i = 0 ; i < alst->pos; i++) {
+                     free(alst->aln[i].refseq);
+                  }
+                  free(alst);
+               }
+               // Replace with new improved alignments.
+               alst = ralst;
+               besta = alst->aln[(batch->lineid + i) % alst->pos];
+            }
+            else {
+               // Found nothing interesting...
+               free(ralst);
+            }
+         }
+
          int found_no_hit_YES = 0;
 
          if (need_to_remap_YES) {
@@ -887,8 +904,7 @@ batch_map
                      alst,  // Contains loci aligned with MEMS.
                      read->seq,
                      idx,
-                     besta.score > 0 ? besta.score : rlen-16,
-                     batch->lineid + i);
+                     besta.score > 0 ? besta.score : rlen-16);
                if (salst->pos > 0) {
                   // Free previous alignments, if any.
                   if (alst != NULL) {
@@ -929,7 +945,7 @@ batch_map
 
          // Compute mapping quality of the best hit.
          if (alst->pos == 1) {
-            besta.qual = uN0.N0 > QUICK_DUPLICATES ?
+            besta.qual = besta.score > 1 && uN0.N0 > QUICK_DUPLICATES ?
                quality_low(rlen, longest_mem, uN0) :
                quality(besta, read->seq, idx, uN0);
          }
