@@ -863,7 +863,7 @@ batch_map
             }
          }
 
-         if (need_to_remap_YES || (besta.score > 1 && uN0.N0 < QUICK_DUPLICATES)) {
+         if (need_to_remap_YES) {
             alnstack_t * ralst = map_rescue_seed(
                   &rescue,
                   alst,
@@ -889,43 +889,45 @@ batch_map
             }
          }
 
-         int found_no_hit_YES = 0;
+//         int found_no_hit_YES = 0;
+//
+//         if (need_to_remap_YES) {
+//            // Run skip-7 seeding of minimum size 16.
+//            wstack_t * skipseeds = skip_seeds(read->seq, idx, 16, 7);
+//            if (skipseeds->pos == 0) {
+//               found_no_hit_YES = 1;
+//            }
+//            else {
+//               // Try aligning with new seeds.
+//               alnstack_t * salst = remap_with_skip_seeds(
+//                     skipseeds,
+//                     alst,  // Contains loci aligned with MEMS.
+//                     read->seq,
+//                     idx,
+//                     besta.score > 0 ? besta.score : rlen-16);
+//               if (salst->pos > 0) {
+//                  // Free previous alignments, if any.
+//                  if (alst != NULL) {
+//                     for(size_t i = 0 ; i < alst->pos; i++) {
+//                        free(alst->aln[i].refseq);
+//                     }
+//                     free(alst);
+//                  }
+//                  // Replace with new improved alignments.
+//                  alst = salst;
+//                  besta = alst->aln[(batch->lineid + i) % alst->pos];
+//               }
+//               else {
+//                  // Found no hit with skip seeds.
+//                  found_no_hit_YES = 1;
+//                  free(salst);
+//               }
+//               // We won't need skip seeds anymore.
+//               free_seeds(skipseeds);
+//            }
+//         }
 
-         if (need_to_remap_YES) {
-            // Run skip-7 seeding of minimum size 16.
-            wstack_t * skipseeds = skip_seeds(read->seq, idx, 16, 7);
-            if (skipseeds->pos == 0) {
-               found_no_hit_YES = 1;
-            }
-            else {
-               // Try aligning with new seeds.
-               alnstack_t * salst = remap_with_skip_seeds(
-                     skipseeds,
-                     alst,  // Contains loci aligned with MEMS.
-                     read->seq,
-                     idx,
-                     besta.score > 0 ? besta.score : rlen-16);
-               if (salst->pos > 0) {
-                  // Free previous alignments, if any.
-                  if (alst != NULL) {
-                     for(size_t i = 0 ; i < alst->pos; i++) {
-                        free(alst->aln[i].refseq);
-                     }
-                     free(alst);
-                  }
-                  // Replace with new improved alignments.
-                  alst = salst;
-                  besta = alst->aln[(batch->lineid + i) % alst->pos];
-               }
-               else {
-                  // Found no hit with skip seeds.
-                  found_no_hit_YES = 1;
-                  free(salst);
-               }
-               // We won't need skip seeds anymore.
-               free_seeds(skipseeds);
-            }
-         }
+         int found_no_hit_YES = alst == NULL || alst->pos == 0;
 
          if (found_no_hit_YES) {
             // Found nothing...
