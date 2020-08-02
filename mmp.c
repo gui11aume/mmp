@@ -104,6 +104,8 @@ build_index
 
    char * fn = malloc(strlen(fname)+10);
    char * fn2 = malloc(strlen(fname)+10);
+   exit_error(fn == NULL);
+   exit_error(fn2 == NULL);
 
    // Read and pack FASTA
    fprintf(stderr, "packing sequence... ");
@@ -159,6 +161,8 @@ build_index
    close(flut);
 
    // Free memory
+   free(fn);
+   free(fn2);
    free(lut);
 }
 
@@ -298,7 +302,7 @@ estimate_N0
    // between the estimates, assume that this error exists.
    if (L2.end + 2 >= L1.beg) p0 = 1.;
 
-   return (uN0_t) {.06, N0, p0};
+   return (uN0_t) {.05, N0, p0};
 
 
 }
@@ -363,30 +367,54 @@ quality_low
 (
    int      slen,
    seed_t * mem,
-   uN0_t    uN0
+   uN0_t    uN0,
+   aln_t    aln
 )
 {
 
-  int len = mem->end - mem->beg + 1;
-  double l = uN0.u*(1-PROB) + PROB*(1-uN0.u/3); // lambda
-  double a = 0;
-  int nends = (mem->beg == 0) + (mem->end == slen-1);
-  switch (nends) {
-    case 0:
-      a = len * (1-PROB) * (1 - pow(1 - l*l*l/3*pow(1-l, len-1), uN0.N0));
-      return a / (PROB + a);
-    case 1:
-      a = len * (1 - pow(1 - l*l/3*pow(1-l, len-1), uN0.N0));
-      return a / (1 + a);
-    case 2:
-      a = len * PROB * (1 - pow(1 - l/3*pow(1-l, len-1), uN0.N0));
-      return a / (1-PROB + a);
-  }
-  // Oops... that's weird.
-  fprintf(stderr, "an error has occurred at line %d\n", __LINE__);
-  fprintf(stderr, "please contact guillaume.filion@gmail.com\n");
-  exit(EXIT_FAILURE);
-  return 0./0.;
+   const int len = mem->end - mem->beg + 1;
+   const double u = uN0.u;
+   const double lmbd = u * (1-PROB) + PROB*(1 - u/3); // lambda
+
+   double phit, pmiss, term1;
+
+   int nends = (mem->beg == 0) + (mem->end == slen-1);
+   switch (nends) {
+      case 0:
+         // The seed is in the middle of the read.
+         phit = pow(1-PROB, len) * PROB * PROB * pow(1 - u/3*pow(1-u, len), uN0.N0);
+         pmiss = len * pow(1-PROB, len-1) * PROB * (1 - pow(1 - lmbd*lmbd*u/3*pow(1-u, len-1), uN0.N0));
+         term1 = pmiss / (pmiss + phit);
+         break;
+      case 1:
+         // The seed abuts the read.
+         phit = pow(1-PROB, len) * PROB * pow(1 - u/3*pow(1-u, len), uN0.N0);
+         pmiss = len * pow(1-PROB, len-1) * PROB * (1 - pow(1 - lmbd*u/3*pow(1-u, len-1), uN0.N0));
+         term1 = pmiss / (pmiss + phit);
+         break;
+      case 2:
+         // Oops... that should not happen.
+         fprintf(stderr, "an error has occurred at line %d\n", __LINE__);
+         fprintf(stderr, "please contact guillaume.filion@gmail.com\n");
+         exit(EXIT_FAILURE);
+   }
+
+   double term2 = .0;
+   if (aln.score >= slen / 25) {
+      // Number of nucleotides that were actually
+      // aligned (i.e. without the seed).
+      int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
+         slen - aln.read_end + aln.read_beg - 2 :
+         slen - aln.read_end + aln.read_beg - 3;
+      double A = aln.score * log(PROB) + (naln-aln.score) * log(1-PROB);
+      double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
+      // Here 'term2' uses non-informative priors. In practice, 'term2'
+      // is either close to 0 or close to 1 and the priors do not matter.
+      term2 = 1. / (1. + exp(A-C));
+   }
+
+   return term1 + term2 > 1. ? 1. : term1 + term2;
+
 }
 
 
@@ -556,13 +584,13 @@ quality
       lgamma(aln.score + 1) - lgamma(slen - aln.score + 1);
    double logp1 = (aln.score+1) * log(PROB) + (slen - aln.score-1) * log(1-PROB) - \
       lgamma(aln.score + 2) - lgamma(slen - aln.score);
-   double p2 = (aln.score + 1) * u/3. * pow(1-u, slen-1);
+   double p2 = (aln.score + 1) * u/3. * pow(1-u, slen-aln.score);
    double term1 = prob_p0 * exp(logp1 - logcond) * (1. - pow(1-p2, N0));
 
    // If the number of errors is high-ish, there is a non-zero
    // chance that the hit is spurious.
    double term2 = .0;
-   if (aln.score > slen / 12) {
+   if (aln.score > slen / 25) {
       // Number of nucleotides that were actually
       // aligned (i.e. without the seed).
       int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
@@ -826,7 +854,7 @@ batch_map
             extend_L1L2(read->seq, rlen, idx, &L1, &L2);
 
             // Compute N (number of duplicates).
-            const double lambda = (1-PROB)*.06 + PROB*(1-.06/3);
+            const double lambda = (1-PROB)*.05 + PROB*(1-.05/3);
             uN0 = estimate_N0(L1, L2, idx, lambda);
 
             // Quick mode: only align longest MEMs
@@ -871,7 +899,7 @@ batch_map
                   idx,
                   besta.score > 0 ? besta.score : rlen-16);
             if (ralst->pos > 0 && ralst->aln[0].score < besta.score) {
-               need_to_remap_YES = 0;
+//               need_to_remap_YES = 0;
                // Free previous alignments, if any.
                if (alst != NULL) {
                   for(size_t i = 0 ; i < alst->pos; i++) {
@@ -947,8 +975,9 @@ batch_map
 
          // Compute mapping quality of the best hit.
          if (alst->pos == 1) {
-            besta.qual = besta.score > 1 && uN0.N0 > QUICK_DUPLICATES ?
-               quality_low(rlen, longest_mem, uN0) :
+            besta.qual = quality(besta, read->seq, idx, uN0);
+            besta.qual = besta.score > 0 && uN0.N0 > QUICK_DUPLICATES ?
+               quality_low(rlen, longest_mem, uN0, besta) :
                quality(besta, read->seq, idx, uN0);
          }
          else {
@@ -1080,7 +1109,7 @@ mt_read
 
    // Allocate batches
    pthread_t * worker = malloc(2*MAXTHREADS*sizeof(pthread_t));
-   batch_t ** batch = malloc(2*MAXTHREADS*sizeof(batch_t));
+   batch_t ** batch = malloc(2*MAXTHREADS*sizeof(batch_t *));
    exit_error(batch == NULL || worker == NULL);
 
    // Allocate and fill static batch info

@@ -16,7 +16,7 @@ profile: $(P)
 
 analyze: CC= clang --analyze
 analyze: CFLAGS += -DDEBUG -g -O0
-analyze: $(OBJECTS)
+analyze: $(OBJECTS) $(P)
 
 
 $(P): mmp.c bwt.h $(OBJECTS)
