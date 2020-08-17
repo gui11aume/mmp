@@ -593,11 +593,11 @@ chain_skip
 void
 extend_L1L2
 (
- const char   * seq,
- const int      len,
- const index_t  idx,
- seed_t       * L1,
- seed_t       * L2
+   const char   * seq,
+   const int      len,
+   const index_t  idx,
+   seed_t       * L1,
+   seed_t       * L2
 )
 {
 
@@ -607,7 +607,6 @@ extend_L1L2
 
    int i;
    size_t merid;
-
 
    // L1 is not availble from the pool of MEM seeds.
    L1->end = len-1;
@@ -696,17 +695,10 @@ mem_seeds
 (
  const char    * seq,
  const index_t   idx,
- const size_t    gamma,
-       seed_t  * rescue
+ const size_t    gamma
 )
 {
 
-   // Erase the rescue seed.
-   bzero(rescue, sizeof(size_t));
-
-   range_t rescue_range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-   int rescuelen = 0;
-   int bestlen = 0;
 
    int len = strlen(seq);
    int end = len-1;
@@ -743,17 +735,12 @@ mem_seeds
             merid = c + (merid << 2);
          }
          range = idx.lut->kmer[merid];
-         if (range.top > range.bot) {
-            rescue_range = range;
-            rescuelen = LUTK;
-         }
       }
 
       // Cancel if we went too far already.
       if (range.top < range.bot) {
-         rescue_range = range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
-         mpos = end; mlen = 0;
-         rescuelen = 0;
+         mpos = end;
+         mlen = 0;
       }
 
       for ( ; mpos >= 0 ; mpos--, mlen++) {
@@ -766,10 +753,6 @@ mem_seeds
             break;
          }
          range = newrange;
-         if (range.top > range.bot) {
-            rescue_range = range;
-            rescuelen++;
-         }
       }
 
       mem.beg = ++mpos;
@@ -781,14 +764,6 @@ mem_seeds
          exit_on_memory_error(m);
          memcpy(m, &mem, sizeof(seed_t));
          push(m, &mems);
-      }
-
-      // Update rescue seed.
-      if (rescuelen > bestlen) {
-         bestlen = rescuelen;
-         rescue->range = rescue_range;
-         rescue->end = mem.end;
-         rescue->beg = rescue->end - rescuelen + 1;
       }
 
       if (mem.beg < 1) break;
@@ -817,15 +792,13 @@ mem_seeds
 
    // DEBUG VERBOSE
    if (DEBUG_VERBOSE) {
-      fprintf(stdout,"\nMEMs (%ld):\n", mems->pos);
+      fprintf(stdout, "%s", "\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n");
+      fprintf(stdout, "MEMs (%ld):\n", mems->pos);
       for(int i = 0; i < mems->pos; i++) {
          seed_t * m = (seed_t *) mems->ptr[i];
          fprintf(stdout, "[%d] (%ld, %ld) loci: %ld, range: (%ld, %ld)\n",
                i, m->beg, m->end, m->range.top-m->range.bot+1, m->range.bot, m->range.top);
       }
-      fprintf(stdout, "....\nRescue seed: (%ld, %ld) loci: %ld, range (%ld, %ld)\n",
-         rescue->beg, rescue->end, rescue->range.top - rescue->range.bot + 1, rescue->range.bot, rescue->range.top);
-      fprintf(stdout,"\n");
    }
 
    return mems;
@@ -1019,12 +992,16 @@ align
    if (seed->beg == 0 && seed->end == slen-1) {
       // Do not align perfect seeds (this should not happen because
       // these events are detected earlier).
-      score = 0;
-      if (DEBUG_VERBOSE)
-         fprintf(stdout, "skip alignment: perfect seed -> score: 0\n");
+      fprintf(stderr, "error line %d\n", __LINE__);
+      fprintf(stderr, "please contact guillaume.filion@gmail.com\n");
+      exit(EXIT_FAILURE);
+//      score = 0;
+//      if (DEBUG_VERBOSE)
+//         fprintf(stdout, "skip alignment: perfect seed -> score: 0\n");
 
    } else {
       // Get genomic sequence
+      // TODO: use the bitfield representation to speed up the alignment.
       char * ref = decompress_genome(genome, alignment.refpos - seed->beg, slen+3);
 
       score = nw(ref,
@@ -1048,6 +1025,7 @@ align
 
       free(ref);
    }
+
    // Check align score.
    if (score <= *best_score) {
       // Create new alignment.
@@ -1167,7 +1145,7 @@ map_rescue_seed
          fprintf(stdout, "skipping locus %ld (limit alignments exceeded)\n--\n",
                   rescue->sa[v] - rescue->beg);
       }
-      // Conservativley set 'minscore' to 1. 
+      // Conservativley set 'minscore' to 1.
       align_t alignment = (align_t){rescue->sa[v], rescue->end - rescue->beg + 1, 1, rescue};
       if (DEBUG_VERBOSE) {
          char buffer[256] = {0};
@@ -1368,39 +1346,37 @@ remap_with_skip_seeds
 }
 
 
-
 alnstack_t *
-mapread
+mapread_no_alignment
 (
    wstack_t      * seeds,
    const char    * seq,
-   const index_t   idx,
-   const int       max_mismatches,
-   const size_t    circ_num
+   const index_t   idx
 )
 {
 
    size_t slen = strlen(seq);
 
    if (DEBUG_VERBOSE) {
-      fprintf(stdout, "\n[READ] sequence: %s\n",seq);
+      fprintf(stdout, "\n[READ] sequence: %s\n\n",seq);
+      fprintf(stdout, "%s", "--------------------------\n");
+      fprintf(stdout, "%s", "Attempting mapping without alignment...");
    }
 
-   int best_score = min(max_mismatches, MAX_ALIGN_MISMATCHES);
-   alnstack_t * best = alnstack_new(10);
-
-   // See if we can compute the score without performing any alignment.
    seed_t * leftmost = (seed_t *) seeds->ptr[seeds->pos-1];
    seed_t * rightmost = (seed_t *) seeds->ptr[0];
+
    if (rightmost->end == slen-1) {
+      // Calls 'malloc()' and exits on error.
+      alnstack_t * best = alnstack_new(10);
       if (rightmost->beg == 0) {
          if (DEBUG_VERBOSE) {
-            fprintf(stdout, "MEM seed aligns perfectly: skipping alignment (score 0)\n");
+            fprintf(stdout, "\nMEM seed aligns perfectly: (score 0)\n");
          }
          range_t range = rightmost->range;
          if (range.top > range.bot) {
             if (DEBUG_VERBOSE) {
-               fprintf(stdout, "Multiple hits:, keeping only %d.", MAX_MINSCORE_REPEATS);
+               fprintf(stdout, "Multiple hits:, keeping only %d.\n", MAX_MINSCORE_REPEATS);
             }
             rightmost->range.top = rightmost->range.bot + MAX_MINSCORE_REPEATS - 1;
          }
@@ -1441,7 +1417,7 @@ mapread
             for (int j = 0 ; j < nloci_left && best->pos < 10 ; j++) {
                if (rightmost->sa[i] - leftmost->sa[j] == dhit) {
                   if (DEBUG_VERBOSE) {
-                     fprintf(stdout, "Pair of MEM seeds aligns with one mismatch: skipping alignment (score 1)\n");
+                     fprintf(stdout, "\nPair of MEM seeds aligns with one mismatch (score 1)\n");
                   }
                   aln_t aln = (aln_t) {
                      .score = 1,
@@ -1457,12 +1433,150 @@ mapread
                }
             }
             }
-         }
-         if (best->pos > 0) {
-            return best;
+            if (best->pos > 0) {
+               return best;
+            }
          }
       }
+      // If we are still here, nothing has been found... we can just
+      // free 'best' because nothing else was allocated.
+      free(best);
    }
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout, "%s", " failed.\n\n");
+   }
+   return NULL;
+}
+
+
+alnstack_t *
+attempt_mask_bypass
+(
+   wstack_t      * seeds,
+   const char    * seq,
+   const index_t   idx
+)
+{
+
+   size_t slen = strlen(seq);
+
+   // Calls 'malloc()' and exits on failure.
+   alnstack_t * best = alnstack_new(10);
+
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout, "%s", "\n--------------------------\n");
+      fprintf(stdout, "%s", "Detected potential masking, attempting bypass...");
+   }
+
+   seed_t * leftmost = (seed_t *) seeds->ptr[seeds->pos-1];
+   seed_t * rightmost = (seed_t *) seeds->ptr[0];
+
+   // We need to resect the seeds a little, but we cannot do that, so
+   // we start over again. We know how much we can push and where we have
+   // to stop so we can dash forward.
+
+   // Start with the lookup table.
+   int end = slen-1;
+   size_t merid = 0;
+   for (int i = 0 ; i < LUTK ; i++) {
+      uint8_t c = ENCODE[(uint8_t) seq[end - i]];
+      merid = c + (merid << 2);
+   }
+
+   range_t range = idx.lut->kmer[merid];
+
+   for (int mpos = end - LUTK ; mpos > leftmost->end ; mpos--) {
+      int c = ENCODE[(uint8_t) seq[mpos]];
+      range.bot = get_rank(idx.occ, c, range.bot - 1);
+      range.top = get_rank(idx.occ, c, range.top) - 1;
+   }
+
+   // OK, we are there... Now look for an error.
+   for (int mpos = leftmost->end ; mpos >= rightmost->beg ; mpos--) {
+      for (int c = 0 ; c < 4 ; c++) {
+         if (c == ENCODE[(uint8_t) seq[mpos]]) continue;
+         range_t newrange = {
+            .bot = get_rank(idx.occ, c, range.bot - 1),
+            .top = get_rank(idx.occ, c, range.top) - 1,
+         };
+         // Try to extend...
+         for (int i = mpos-1 ; i >= 0 ; i--) {
+            int c = ENCODE[(uint8_t) seq[i]];
+            newrange.bot = get_rank(idx.occ, c, newrange.bot - 1);
+            newrange.top = get_rank(idx.occ, c, newrange.top) - 1;
+            if (newrange.top < newrange.bot)
+               break;
+         }
+         if (newrange.top >= newrange.bot) {
+            if (DEBUG_VERBOSE) {
+               fprintf(stdout, "%s", "\nBypass successful.\n");
+            }
+            // Calls 'malloc()' and exits on memory error.
+            size_t * sa = query_csa_range(idx.csa, idx.bwt, idx.occ, newrange);
+            size_t nloci = newrange.top - newrange.bot + 1;
+            for (int i = 0 ; i < nloci && best->pos < 10 ; i++, best->pos++) {
+               // Get the reference sequence directly from the read
+               // because we know where the error is.
+               char * refseq = strndup(seq, 1024);
+               exit_on_memory_error(refseq);
+               refseq[mpos] = "acgt"[c]; // That's the error.
+               aln_t aln = (aln_t) {
+                  .score = 1,
+                  .refpos = sa[i],
+                  .refseq = refseq,
+                  .read_beg = 0,
+                  .read_end = slen-1,
+                  .qual = 0. / 0.,
+               };
+               best->aln[best->pos] = aln;
+               best->seen[best->pos] = sa[i];
+            }
+            if (best->pos >= MAX_MINSCORE_REPEATS) {
+               return best;
+            }
+         }
+      }
+      int c = ENCODE[(uint8_t) seq[mpos]];
+      range.bot = get_rank(idx.occ, c, range.bot - 1);
+      range.top = get_rank(idx.occ, c, range.top) - 1;
+   }
+
+   if (best->pos > 0) {
+      return best;
+   }
+   // Erm... Still here? Nothing happened... we can free 'best' and wrap up.
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout, "%s", " failed.\n");
+   }
+   free(best);
+   return NULL;
+}
+
+
+alnstack_t *
+mapread
+(
+   wstack_t      * seeds,
+   const char    * seq,
+   const index_t   idx,
+   const int       max_mismatches,
+   const size_t    circ_num
+)
+{
+
+   size_t slen = strlen(seq);
+
+   if (DEBUG_VERBOSE) {
+      fprintf(stdout, "%s", "\n--------------------------\n");
+      fprintf(stdout, "Aligning MEM seeds...\n");
+   }
+
+   int best_score = min(max_mismatches, MAX_ALIGN_MISMATCHES);
+   // Calls 'malloc()' and exits on failure.
+   alnstack_t * best = alnstack_new(10);
+
+   seed_t * leftmost = (seed_t *) seeds->ptr[seeds->pos-1];
+   seed_t * rightmost = (seed_t *) seeds->ptr[0];
 
    // Sort seeds by loci, ascending.
    qsort(seeds->ptr, seeds->pos, sizeof(seed_t *), mem_by_loci);
@@ -1475,7 +1589,7 @@ mapread
          break;
    }
 
-   // TODO: see this repeats minscore. //
+   // TODO: check this repeats minscore. //
    // Compute repeats minscore.
    int repeats_minscore = slen+1;
    for (size_t i = n_mem; i < seeds->pos; i++) {

@@ -170,7 +170,7 @@ struct chr_t {
    size_t  * start;
    char   ** name;
 };
-// Lookup table 
+// Lookup table
 #define LUTK 12  // Size of k-mers in the LUT.
 struct lut_t { range_t kmer[1<<(2*LUTK)]; };
 

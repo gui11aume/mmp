@@ -238,10 +238,10 @@ load_index
 uN0_t
 estimate_N0
 (
- seed_t         L1,
- seed_t         L2,
- const index_t  idx,
- const double   mu
+   seed_t         L1,
+   seed_t         L2,
+   const index_t  idx,
+   const double   mu
 )
 {
 
@@ -274,7 +274,9 @@ estimate_N0
    int N2 = log(log(a)/log(b)) / (log(b) - log(a));
 
    // Estimate N0.
-   int N0 = (N1 + N2) / 2;
+   //int N0 = (N1 + N2) / 2;
+   // XXX TEST XXX //
+   int N0 = N1 < N2 ? N1 : N2;
 
    // Compute p0 (prob of the min).
    int m = fwd < bwd ? fwd : bwd;
@@ -429,7 +431,7 @@ quality
 {
 
    double slen = strlen(seq);
-   // FIXME: assert is very weak (here only to declare 'uN0' on stack).
+   // FIXME: asserts are very weak (here only to declare 'uN0' on stack).
    assert(slen < 250);
    assert(slen >= GAMMA);
 
@@ -604,7 +606,7 @@ quality
    }
 
    return term1 + term2 > 1. ? 1. : term1 + term2;
-   
+
 
 //   pthread_mutex_lock(mutex);
 //   double poff = auto_mem_seed_offp(slen, u, N0);
@@ -829,27 +831,43 @@ batch_map
          read_t * read = (read_t *)batch->reads->ptr[i];
          size_t rlen = strlen(read->seq);
 
-         // Compute seeds.
-         seed_t rescue = {0};
-         wstack_t * memseeds = mem_seeds(read->seq, idx, GAMMA, &rescue);
-
-         // Need to remap if we found no seed.
-         int need_to_remap_YES = memseeds->pos == 0;
-
-         // Data for the best alignment.
-         aln_t besta = {0};
-
-         // Data for number of duplicates.
-         uN0_t uN0 = {0};
-
-         // Keep the longest MEM for quick mapping.
-         seed_t * longest_mem = NULL;
+         // Get MEM seeds.
+         wstack_t * memseeds = mem_seeds(read->seq, idx, GAMMA);
+         const int MEM_seeds_found_YES = memseeds->pos > 0;
 
          // Working alignment stack.
          alnstack_t * alst = NULL;
 
-         if (!need_to_remap_YES) {
-            seed_t L1, L2;
+         // If we found MEM seeds, try mapping without alignment.
+         if (MEM_seeds_found_YES) {
+            alst = mapread_no_alignment(memseeds, read->seq, idx);
+         }
+
+         if (MEM_seeds_found_YES && alst == NULL) {
+            seed_t * leftmost = (seed_t *) memseeds->ptr[memseeds->pos-1];
+            seed_t * rightmost = (seed_t *) memseeds->ptr[0];
+            // If the rightmost and the leftmost MEM seeds overlap, there is
+            // probably an error at the junction, so we use this information
+            // to our advantage.
+            if (leftmost->beg == 0 && rightmost->end == rlen-1 && leftmost->end >= rightmost->beg) {
+               alst = attempt_mask_bypass(memseeds, read->seq, idx);
+            }
+         }
+
+         // Data for the best alignment.
+         aln_t besta = {0};
+         if (alst != NULL) {
+            besta = alst->aln[(batch->lineid + i) % alst->pos];
+         }
+         // Data for number of duplicates.
+         uN0_t uN0 = {0};
+         // Keep the longest MEM for quick mapping.
+         seed_t * longest_mem = NULL;
+         seed_t L1, L2;
+
+         int need_to_map_rescue_seed_YES = 0;
+
+         if (MEM_seeds_found_YES && alst == NULL) {
             // Proceed to L1 and L2 extension on the read.
             extend_L1L2(read->seq, rlen, idx, &L1, &L2);
 
@@ -862,16 +880,12 @@ batch_map
                longest_mem = filter_longest_mem(memseeds);
             }
 
-            alst = mapread(
-                  memseeds,
-                  read->seq,
-                  idx,
-                  rlen,
-                  batch->lineid + i);
+            alst = mapread(memseeds, read->seq, idx,
+                  rlen, batch->lineid + i);
 
             if (alst->pos == 0) {
                // Did not find any hit: need to remap.
-               need_to_remap_YES = 1;
+               need_to_map_rescue_seed_YES = 1;
             }
             else {
                // Pick a best hit at "random".
@@ -882,24 +896,19 @@ batch_map
                if (besta.score >= 4 + rlen / 25) {
                   if (uN0.N0 > QUICK_DUPLICATES) {
                      // Do not remap reads with many duplicates.
-                     need_to_remap_YES = 0;
+                     need_to_map_rescue_seed_YES = 0;
                   }
                   else {
-                     need_to_remap_YES = 1;
+                     need_to_map_rescue_seed_YES = 1;
                   }
                }
             }
          }
 
-         if (need_to_remap_YES) {
-            alnstack_t * ralst = map_rescue_seed(
-                  &rescue,
-                  alst,
-                  read->seq,
-                  idx,
-                  besta.score > 0 ? besta.score : rlen-16);
+         if (need_to_map_rescue_seed_YES) {
+            alnstack_t * ralst = map_rescue_seed(&L2, alst,
+                  read->seq, idx, besta.score > 0 ? besta.score : rlen-16);
             if (ralst->pos > 0 && ralst->aln[0].score < besta.score) {
-//               need_to_remap_YES = 0;
                // Free previous alignments, if any.
                if (alst != NULL) {
                   for(size_t i = 0 ; i < alst->pos; i++) {
