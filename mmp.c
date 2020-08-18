@@ -15,6 +15,8 @@
 #define QUICK_DUPLICATES 20
 #define MAXTHREADSDEFAULT 1
 
+#define CST_U .05
+
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 
 typedef struct uN0_t uN0_t;
@@ -304,7 +306,7 @@ estimate_N0
    // between the estimates, assume that this error exists.
    if (L2.end + 2 >= L1.beg) p0 = 1.;
 
-   return (uN0_t) {.05, N0, p0};
+   return (uN0_t) {CST_U, N0, p0};
 
 
 }
@@ -542,14 +544,14 @@ quality
       }
    }
 
-   double u = uN0_read.u;
+   double u = CST_U;
    int N0 = uN0_read.N0;
    double p0 = uN0_read.p0;
 
    // Estimate N0 on the hit.
    seed_t L1, L2;
    extend_L1L2(aln.refseq, slen, idx, &L1, &L2);
-   uN0_t uN0_hit = estimate_N0(L1, L2, idx, u);
+   uN0_t uN0_hit = estimate_N0(L1, L2, idx, CST_U);
    if (uN0_hit.N0 * uN0_hit.p0 > N0 * p0) {
       N0 = uN0_hit.N0;
       p0 = uN0_hit.p0;
@@ -872,7 +874,7 @@ batch_map
             extend_L1L2(read->seq, rlen, idx, &L1, &L2);
 
             // Compute N (number of duplicates).
-            const double lambda = (1-PROB)*.05 + PROB*(1-.05/3);
+            const double lambda = (1-PROB)*CST_U + PROB*(1-CST_U/3);
             uN0 = estimate_N0(L1, L2, idx, lambda);
 
             // Quick mode: only align longest MEMs
