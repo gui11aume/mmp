@@ -908,7 +908,9 @@ batch_map
          }
 
          if (need_to_map_rescue_seed_YES) {
-            alnstack_t * ralst = map_rescue_seed(&L2, alst,
+            // Choose a rescue seed (shortest).
+            seed_t rescue = (L1.end - L1.beg) < (L2.end - L2.beg) ? L1 : L2;
+            alnstack_t * ralst = map_rescue_seed(&rescue, alst,
                   read->seq, idx, besta.score > 0 ? besta.score : rlen-16);
             if (ralst->pos > 0 && ralst->aln[0].score < besta.score) {
                // Free previous alignments, if any.
