@@ -710,7 +710,7 @@ mem_seeds
    // Initialize mem stack
    wstack_t * mems = stack_new(32);
 
-   range_t range;
+   range_t range = {0};
    range_t newrange = {0};
 
    // Iterate over all read positions
@@ -719,18 +719,17 @@ mem_seeds
       mem.end = end;
 
       // Backward <<<
-      range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
       int mpos = end, mlen = 0;
 
       // Query the beginning of the read in lookup table.
       if (end >= LUTK - 1) {
          size_t merid = 0;
          for ( ; mlen < LUTK ; mlen++, mpos--) {
-            if (NONALPHABET[(uint8_t) seq[end-mlen]]) {
-               range.bot = 1;
-               range.top = 0;
-               break;
-            }
+//            if (NONALPHABET[(uint8_t) seq[end-mlen]]) {
+//               range.bot = 1;
+//               range.top = 0;
+//               break;
+//            }
             uint8_t c = ENCODE[(uint8_t) seq[end-mlen]];
             merid = c + (merid << 2);
          }
@@ -739,12 +738,13 @@ mem_seeds
 
       // Cancel if we went too far already.
       if (range.top < range.bot) {
+         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
          mpos = end;
          mlen = 0;
       }
 
       for ( ; mpos >= 0 ; mpos--, mlen++) {
-         if (NONALPHABET[(uint8_t)seq[mpos]]) break;
+//         if (NONALPHABET[(uint8_t)seq[mpos]]) break;
          int c = ENCODE[(uint8_t) seq[mpos]];
          newrange.bot = get_rank(idx.occ, c, range.bot - 1);
          newrange.top = get_rank(idx.occ, c, range.top) - 1;
@@ -771,9 +771,27 @@ mem_seeds
       // Find new end position (push forward).
       end = mem.beg - 1;
       if (NONALPHABET[(uint8_t) seq[end]]) {
-         while (end > 0 && NONALPHABET[(uint8_t) seq[end]]) end--;
+         // while (end > 0 && NONALPHABET[(uint8_t) seq[end]]) end--;
+         // This should not happen at all.
+         fprintf(stderr, "error line %d\n", __LINE__);
+         fprintf(stderr, "please contact guillaume.filion@gmail.com");
+         exit(EXIT_FAILURE);
       } else {
-         range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+         // Use the lookup table.
+         size_t merid = 0;
+         for (int i = 0 ; i < LUTK ; i++) {
+            uint8_t c = REVCMP[(uint8_t) seq[end+i]];
+            merid = c + (merid << 2);
+         }
+         range = idx.lut->kmer[merid];
+         if (range.top < range.bot) {
+            // Cancel if we went too far already.
+            range = (range_t) { .bot = 1, .top = idx.occ->txtlen-1 };
+         }
+         else {
+            // Otherwise move end position.
+            end += LUTK;
+         }
          while (1) {
             int c = REVCMP[(uint8_t) seq[end]];
             range.bot = get_rank(idx.occ, c, range.bot - 1);
@@ -1104,6 +1122,13 @@ map_rescue_seed
 
    // Allocate new best hits.
    alnstack_t * best = alnstack_new(10);
+
+   if (rescue->end == 0 && rescue->beg == 0) {
+      if (DEBUG_VERBOSE) {
+         fprintf(stdout, "%s\n", "No rescue seed: aborting.\n");
+      }
+      return best;
+   }
 
    rescue->sa = query_csa_range(idx.csa, idx.bwt, idx.occ, rescue->range);
 
@@ -1465,7 +1490,7 @@ attempt_mask_bypass
 
    if (DEBUG_VERBOSE) {
       fprintf(stdout, "%s", "\n--------------------------\n");
-      fprintf(stdout, "%s", "Detected potential masking, attempting bypass...");
+      fprintf(stdout, "%s", "Detected potential masking, attempting bypass...\n");
    }
 
    seed_t * leftmost = (seed_t *) seeds->ptr[seeds->pos-1];
@@ -1508,12 +1533,24 @@ attempt_mask_bypass
                break;
          }
          if (newrange.top >= newrange.bot) {
+            // We found at least a hit with 1 mismatch. Since there is
+            // no perfect match, we have a winner!
             if (DEBUG_VERBOSE) {
-               fprintf(stdout, "%s", "\nBypass successful.\n");
+               fprintf(stdout, "Found hit(s) with 1 mismatch in position %d (%c > %c)\n",
+                     mpos, "ACGT"[c], seq[mpos]);
             }
+            if (newrange.top - newrange.bot + 1 > MAX_MINSCORE_REPEATS) {
+               // We have many winners... We are not able to map, so 
+               // no need to take the risk of blowing the memory.
+               if (DEBUG_VERBOSE) {
+                  fprintf(stdout, "Too many hits, keeping only %d\n",
+                        MAX_MINSCORE_REPEATS);
+               }
+               newrange.top = newrange.bot + MAX_MINSCORE_REPEATS - 1;
+            }
+            size_t nloci = newrange.top - newrange.bot + 1;
             // Calls 'malloc()' and exits on memory error.
             size_t * sa = query_csa_range(idx.csa, idx.bwt, idx.occ, newrange);
-            size_t nloci = newrange.top - newrange.bot + 1;
             for (int i = 0 ; i < nloci && best->pos < 10 ; i++, best->pos++) {
                // Get the reference sequence directly from the read
                // because we know where the error is.
@@ -1546,7 +1583,7 @@ attempt_mask_bypass
    }
    // Erm... Still here? Nothing happened... we can free 'best' and wrap up.
    if (DEBUG_VERBOSE) {
-      fprintf(stdout, "%s", " failed.\n");
+      fprintf(stdout, "%s", "Bypass failed.\n");
    }
    free(best);
    return NULL;
@@ -1589,17 +1626,9 @@ mapread
          break;
    }
 
-   // TODO: check this repeats minscore. //
-   // Compute repeats minscore.
-   int repeats_minscore = slen+1;
-   for (size_t i = n_mem; i < seeds->pos; i++) {
-      seed_t * s = (seed_t *)seeds->ptr[i];
-      repeats_minscore = min(repeats_minscore, (s->beg > 0) + (s->end < slen-1));
-   }
-
    if (DEBUG_VERBOSE) {
-      fprintf(stdout, "MEMs: %ld, alignable: %ld, repeat-minscore: %d\n\n",
-            seeds->pos, n_mem, repeats_minscore);
+      fprintf(stdout, "MEMs: %ld, alignable: %ld\n\n",
+            seeds->pos, n_mem);
    }
 
    int nseen = 0;
@@ -1686,7 +1715,7 @@ mapread
       }
 
       // Avoid alignments with score that is too high.
-      if (minscore >= repeats_minscore || minscore > best_score ||
+      if (minscore > best_score ||
             (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)) {
          continue;
       }
@@ -1737,16 +1766,7 @@ mapread
 
          align(alignment, seq, idx.dna, idx.occ->txtlen, &best_score, &best);
 
-         // Stop alignments if necessary conditions met
-         // TODO: check if this can be safely removed now. //
-//         if (minscore == best_score && best->pos >= MAX_MINSCORE_REPEATS)
-//            break;
       }
-   }
-
-   // Check if best alignment is 100% unique
-   if (best_score >= repeats_minscore) {
-      best->pos = 0;
    }
 
    // Copy genomic sequences for best alignments.

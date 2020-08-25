@@ -380,7 +380,7 @@ quality_low
    const double u = uN0.u;
    const double lmbd = u * (1-PROB) + PROB*(1 - u/3); // lambda
 
-   double phit, pmiss, term1;
+   double phit, pmiss, term1 = 1.;
 
    int nends = (mem->beg == 0) + (mem->end == slen-1);
    switch (nends) {
@@ -601,7 +601,7 @@ quality
          slen - aln.read_end + aln.read_beg - 2 :
          slen - aln.read_end + aln.read_beg - 3;
       double A = aln.score * log(PROB) + (naln-aln.score) * log(1-PROB);
-      double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
+      double C = naln * log(.5);
       // Here 'term2' uses non-informative priors. In practice, 'term2'
       // is either close to 0 or close to 1 and the priors do not matter.
       term2 = 1. / (1. + exp(A-C));
@@ -908,10 +908,21 @@ batch_map
          }
 
          if (need_to_map_rescue_seed_YES) {
-            // Choose a rescue seed (shortest).
-            seed_t rescue = (L1.end - L1.beg) < (L2.end - L2.beg) ? L1 : L2;
+            // Choose a rescue seed.
+            seed_t rescue = {0};
+            int nloci_L1 = L1.range.top - L1.range.bot + 1;
+            int nloci_L2 = L2.range.top - L2.range.bot + 1;
+            if (nloci_L1 == 1 && nloci_L2 == 1) {
+               rescue = (L1.end - L1.beg) < (L2.end - L2.beg) ? L1 : L2;
+            }
+            else if (nloci_L1 == 1 && nloci_L2 > 1) {
+               rescue = L1;
+            }
+            else if (nloci_L2 == 1 && nloci_L1 > 1) {
+               rescue = L2;
+            }
             alnstack_t * ralst = map_rescue_seed(&rescue, alst,
-                  read->seq, idx, besta.score > 0 ? besta.score : rlen-16);
+                  read->seq, idx, besta.score);
             if (ralst->pos > 0 && ralst->aln[0].score < besta.score) {
                // Free previous alignments, if any.
                if (alst != NULL) {
