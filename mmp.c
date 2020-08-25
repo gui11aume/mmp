@@ -12,7 +12,7 @@
 #define GAMMA 19
 #define PROBDEFAULT 0.01
 #define SKIPQUALDEFAULT 10
-#define QUICK_DUPLICATES 20
+#define QUICK_DUPLICATES 50
 #define MAXTHREADSDEFAULT 1
 
 #define CST_U .05
@@ -276,9 +276,7 @@ estimate_N0
    int N2 = log(log(a)/log(b)) / (log(b) - log(a));
 
    // Estimate N0.
-   //int N0 = (N1 + N2) / 2;
-   // XXX TEST XXX //
-   int N0 = N1 < N2 ? N1 : N2;
+   int N0 = (N1 + N2) / 2;
 
    // Compute p0 (prob of the min).
    int m = fwd < bwd ? fwd : bwd;
