@@ -2,7 +2,7 @@ P= mmp
 
 CC= gcc
 CFLAGS= -std=c99 -Wall
-OBJECTS= bwt.o map.o QSufSort.o bwt_gen.o
+OBJECTS= bwt.o map.o QSufSort.o bwt_gen.o sesame.o
 
 # development flags: -DNOQUAL -DFASTOUT
 all: CFLAGS += -DNDEBUG -O3
@@ -16,7 +16,7 @@ profile: $(P)
 
 analyze: CC= clang --analyze
 analyze: CFLAGS += -DDEBUG -g -O0
-analyze: $(OBJECTS) $(P)
+analyze: $(OBJECTS)
 
 
 $(P): mmp.c bwt.h $(OBJECTS)
