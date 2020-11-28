@@ -12,8 +12,7 @@
 
 #define GAMMA 19
 #define U_CST .05
-#define PROBDEFAULT 0.01
-#define SKIPQUALDEFAULT 10
+#define PROB 0.01
 #define QUICK_DUPLICATES 20
 #define MAXTHREADSDEFAULT 1
 
@@ -72,17 +71,14 @@ struct batch_t {
 
 enum fmt_t {unset = 0, fasta = 1, fastq = 2};
 
-static double PROB = PROBDEFAULT;
-static double SKIPQUAL = SKIPQUALDEFAULT;
 static int    MAXTHREADS = MAXTHREADSDEFAULT;
 
 char* HELP_MSG =
   "Usage:\n"
   "   index:  mmp  --index  index.fasta\n"
-  "   map:    mmp [-e 0.01 | -t 1] index.fasta reads.fasta\n"
+  "   map:    mmp [-t 1] index.fasta reads.fasta\n"
   "\n"
   "Options:\n"
-  "  -e: sequencing error rate (default: 0.01)\n"
   "  -t: number of threads (default: 1)\n"
   "\n";
 
@@ -451,11 +447,10 @@ quality
 {
 
    double slen = strlen(seq);
-   // FIXME: assert is very weak (here only to declare 'uN0' on stack).
-   assert(slen < 250);
-   assert(slen >= GAMMA);
+   if (slen >= GAMMA) {
+      return 1.;
+   }
 
-   //int tot = (slen/10) - 2; // XXX old version XXX //
    const int tot = 3;
    int yes_max_evidence_N_is_0 = 0;
    double prob_p0 = .5;
@@ -563,27 +558,10 @@ quality
             // 84 possibilities in the order error, mutation,
             // compensated error (two times by symmetry).
             return 0.2 * 2*315*u/3*u*(1-u/3)*pow(1-u,47) / L50 / (L50-1);
-   //         else if (slen == 50) {
-   //            // Special case where there are 231 possibilities in
-   //            // the order mutation, error, compensated error, plus
-   //            // 84 possibilities in the order error, mutation,
-   //            // compensated error (two times by symmetry).
-   //            return 0.2 * 2*315*u/3*u*(1-u/3)*pow(1-u,47) /
-   //                  slen / (slen-1);
-   //         }
-   //         else {
-   //            return mm * 6*pow(11*PROB*u/3 / (1-PROB), mm) *
-   //                  pow((1-PROB)/PROB,2) * pow(1-u,slen-mm) /
-   //                  slen / (slen-1);
-   //            // 0.1 *mm*11*10*(1-p)*u * p*(1-u/3) * (11*pu/3)^{mm-1} *
-   //            // (1-u)^k-mm-1 * (1-p)^k-mm-1 / k*(k-1)/2*p^2*(1-p)^k-2
-   //         }
          }
       }
    }
 
-   /// THIS IS PASSAGE A ///
-   // XXX THE GREAT RETURN OF SESAME XXX //
    seed_t L1, L2;
    extend_L1L2(aln.refseq, slen, idx, &L1, &L2);
 
@@ -612,149 +590,6 @@ quality
    else {
       return prob > 1. ? 1. : prob;
    }
-   /// END OF PASSAGE A ///
-
-   /// THIS IS PSSAGE B ///
-//   double u = U_CST;
-//   int N0 = uN0_read.N0;
-//   double p0 = uN0_read.p0;
-//
-//   seed_t L1, L2;
-//   extend_L1L2(aln.refseq, slen, idx, &L1, &L2);
-//   uN0_t uN0_hit = estimate_N0(L1, L2, idx, U_CST);
-//   fprintf(stdout, "N0 = %ld\n", uN0_hit.N0);
-//
-//// XXX BEGIN ADD XXX //
-//   int condition = L2.end >= L1.beg-2;
-//   double term1 = condition ? PROB / 3 : PROB*PROB / 9;
-//   // If the number of errors is high-ish, there is a non-zero
-//   // chance that the hit is spurious.
-//   double term2 = .0;
-//   if (aln.score >= slen / 20) {
-//      double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
-//      double C = aln.score * log(U_CST)  + (slen-aln.score) * log(1-U_CST);
-//      // Here 'term2' uses non-informative priors. In practice, 'term2'
-//      // is either close to 0 or close to 1 and the priors do not matter.
-//      term2 = 1. / (1. + exp(A-C));
-//   }
-//   return term1 + term2 > 1 ? 1 : term1 + term2;
-//// XXX END ADD XXX //
-   /// END OF PASSAGE B ///
-
-// XXX BEGIN REMOVE XXX //
-//   uN0_t uN0_hit = estimate_N0(L1, L2, idx, u);
-//   if (uN0_hit.N0 * uN0_hit.p0 > N0 * p0) {
-//      N0 = uN0_hit.N0;
-//      p0 = uN0_hit.p0;
-//   }
-//
-//   if (yes_max_evidence_N_is_0) {
-//     N0 = 1;
-//     prob_p0 = (prob_p0 + p0) / 2;
-//   }
-//   else {
-//     prob_p0 = p0;
-//   }
-//
-//   if (aln.score == 0) {
-//     // Special case for perfect alignment score.
-//     // If we are here, there is only one hit, so 
-//     // all the others have at least one mutation.
-//     double cond = pow(1-PROB, slen) * pow(1-pow(1-u, slen), N0);
-//     // Probably that there is one error (even though we do not know it).
-//     double p1 = slen * PROB * pow(1-PROB, slen-1);
-//     // Probability that a given duplicate is a perfect match.
-//     double p2 = u/3. * pow(1-u, slen-1);
-//     // Probability that exactly one duplicate has perfect match.
-//     double pdup = N0 * p2 * pow(1-p2,N0-1);
-//     double prob = p0 * p1 * pdup / cond;
-//     return prob > 1. ? 1. : prob;
-//   }
-//
-//   if (aln.score == 1) {
-//     // Special case for one error.
-//     // If we are here, there is only one hit, so all the others
-//     // have at least two mutations (use Poisson approximation).
-//     const double param = slen * u;
-//     double cond = slen * PROB * pow(1-PROB, slen-1) *
-//        pow(1-(1 + param)*exp(-param), N0);
-//     // We assume that the read has two errors, and that
-//     // one is compensated in a duplicate.
-//     // Probably that there are two errors (even though we do not know it).
-//     double p1 = slen * (slen-1) / 2 * pow(PROB, 2) * pow(1-PROB, slen-2);
-//     // Probability that a given duplicate has score 1.
-//     double p2 = 2 * u/3. * pow(1-u, slen-1);
-//     // Probability that exactly one duplicate has score 1.
-//     double pdup = N0 * p2 * pow(1-p2,N0-1);
-//     double prob = p0 * p1 * pdup / cond;
-//     return prob > 1. ? 1. : prob;
-//   }
-//
-//   // If we are here, there is only one hit, so all the others
-//   // have at least aln.score+1 mutations (use Poisson approximation).
-//   const double param = slen * u;
-//   double param_pow_x = 1;
-//   double poiss = 1.;
-//   for (int x = 1 ; x <= aln.score ; x++) {
-//      param_pow_x *= param;
-//      poiss += param_pow_x / x;
-//   }
-//   poiss = 1. - poiss * exp(-param);
-//   double logcond = (aln.score) * log(PROB) + (slen - aln.score) * log(1. - PROB) + 
-//      lgamma(aln.score + 1) - lgamma(slen - aln.score + 1) + N0 * log(poiss);
-//   // Probability that there are aln.score+1 errors (even though we do not know it).
-//   double logp1 = (aln.score+1) * log(PROB) + (slen - aln.score-1) * log(1-PROB) + 
-//      lgamma(aln.score + 2) - lgamma(slen - aln.score);
-//   // Probablity that a given duplicate has score aln.score.
-//   double p2 = aln.score * u/3. * pow(1-u, slen-1);
-//   // Probability that exactly one duplicate has score 1.
-//   double pdup = N0 * p2 * pow(1-p2,N0-1);
-//   double term1 = p0 * exp(logp1 - logcond) * pdup;
-//
-//   // If the number of errors is high-ish, there is a non-zero
-//   // chance that the hit is spurious.
-//   double term2 = .0;
-//   if (aln.score > slen / 12) {
-//      // Number of nucleotides that were actually
-//      // aligned (i.e. without the seed).
-//      int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
-//         slen - aln.read_end + aln.read_beg - 2 :
-//         slen - aln.read_end + aln.read_beg - 3;
-//      double A = aln.score * log(PROB) + (naln-aln.score) * log(1-PROB);
-//      double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
-//      // Here 'term2' uses non-informative priors. In practice, 'term2'
-//      // is either close to 0 or close to 1 and the priors do not matter.
-//      term2 = 1. / (1. + exp(A-C));
-//   }
-//
-//   return term1 + term2 > 1. ? 1. : term1 + term2;
-// XXX END REMOVE XXX //
-   
-
-//   pthread_mutex_lock(mutex);
-//   double poff = auto_mem_seed_offp(slen, u, N0);
-//   pthread_mutex_unlock(mutex);
-//
-//   // Weight of the evidence if mapping is correct...
-//   double A = aln.score * log(PROB) + (slen-aln.score) * log(1-PROB);
-//   // ... if mapping is on a duplicate...
-//   double B = aln.score * log(u) + (slen-aln.score) * log(1-u);
-//   // ... and if mapping is random.
-//   int naln = (aln.read_beg == 0 || aln.read_end == slen-1) ?
-//      slen - aln.read_end + aln.read_beg - 2 :
-//      slen - aln.read_end + aln.read_beg - 3;
-//   double C = aln.score * log(.75)  + (naln-aln.score) * log(.25);
-//
-//   if (A - B > 1.) A = B + 1.;
-//
-//   // Here 'term2' uses non-informative prios instead of Sesame
-//   // priors for the sake of simplicity. In practice, 'term2' is
-//   // either very close to 0 or very close to 1 and the priors
-//   // do not matter.
-//   double term1 = prob_p0 * poff / ( poff + exp(A-B)*(1-poff) );
-//   double term2 = aln.score < slen / 5 ? 0 : 1. / (1. + exp(A-C));
-//
-//   return term1 + term2 > 1. ? 1. : term1 + term2;
 
 }
 
@@ -897,7 +732,6 @@ batch_map
 )
 {
 
-   // TODO: fix horrible fix //
    int success = sesame_set_static_params(19, 100, .01);
    if (!success) {
       fprintf(stderr, "sesame error\n");
@@ -971,20 +805,7 @@ batch_map
             longest_mem = filter_longest_mem(seeds);
          }
 
-         alnstack_t * alst = NULL;
-            
-//         // Check potential masking and attempt bypass.
-//         if (seeds->pos > 1) {
-//            seed_t * leftmost = (seed_t *) seeds->ptr[seeds->pos-1];
-//            seed_t * rightmost = (seed_t *) seeds->ptr[0];
-//            if (leftmost->beg == 0 && rightmost->end == rlen-1 && leftmost->end >= rightmost->beg) {
-//               alst = attempt_mask_bypass(seeds, read->seq, idx);
-//            }
-//         }
-
-         if (alst == NULL) {
-            alst = mapread(seeds, read->seq, idx, rlen, batch->lineid + i, GAMMA);
-         }
+         alnstack_t * alst = mapread(seeds, read->seq, idx, rlen, batch->lineid + i, GAMMA);
 
          // Did not find anything.
          if (alst->pos == 0) {
@@ -1320,15 +1141,7 @@ char ** argv
 
       for (int i = 1; i < argc; i++) {
          if (argv[i][0] == '-') {
-            if (argv[i][1] == 'q') {
-               SKIPQUAL = strtod(argv[++i], NULL);
-            } else if (argv[i][1] == 'e') {
-               PROB = strtod(argv[++i], NULL);
-               if (PROB <= 0 || PROB >= 1) {
-                  fprintf(stderr, "Sequencing error must be in (0,1).\n");
-                  exit(EXIT_FAILURE);
-               }
-            } else if (argv[i][1] == 't') {
+            if (argv[i][1] == 't') {
                MAXTHREADS = atoi(argv[++i]);
                if (MAXTHREADS <= 0) {
                   fprintf(stderr, "Max threads must be greater than 0.\n");
